@@ -336,19 +336,39 @@ pub fn reopen_error_log() -> io::Result<()> {
 }
 
 /// Installs the `tracing` subscriber that writes to the error log.
-/// `FERRY_LOG` (e.g. `debug`) adjusts verbosity.
+/// `FERRY_LOG` (e.g. `debug`) sets the level.
 pub fn init_error_log() {
     let ansi = error_sink().load().is_terminal() && std::env::var_os("NO_COLOR").is_none();
+    let value = std::env::var("FERRY_LOG").ok();
+    let (level, bad) = log_level(value.as_deref());
     tracing_subscriber::fmt()
         .with_writer(|| ErrorWriter(Vec::new()))
         .with_target(false)
         .with_timer(IsoTime)
         .with_ansi(ansi)
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_env("FERRY_LOG")
-                .unwrap_or_else(|_| "info".into()),
-        )
+        .with_max_level(level)
         .init();
+    if let Some(bad) = bad {
+        tracing::warn!(
+            "FERRY_LOG={bad:?} isn't a level; expected error, warn, info, debug or trace. Using info."
+        );
+    }
+}
+
+/// The error log level for a `FERRY_LOG` value, and the value itself if it
+/// isn't a level.
+fn log_level(value: Option<&str>) -> (tracing::Level, Option<&str>) {
+    match value.map(str::trim) {
+        None | Some("") => (tracing::Level::INFO, None),
+        Some(v) => match v.to_ascii_lowercase().as_str() {
+            "error" => (tracing::Level::ERROR, None),
+            "warn" => (tracing::Level::WARN, None),
+            "info" => (tracing::Level::INFO, None),
+            "debug" => (tracing::Level::DEBUG, None),
+            "trace" => (tracing::Level::TRACE, None),
+            _ => (tracing::Level::INFO, Some(v)),
+        },
+    }
 }
 
 /// Buffers one event, then writes it to the current error sink as one line.
@@ -435,6 +455,19 @@ mod tests {
         let t = UNIX_EPOCH + Duration::from_millis(1_792_119_600_500);
         assert_eq!(timestamp(t), "2026-10-16T03:00:00.500Z");
         assert_eq!(timestamp(UNIX_EPOCH), "1970-01-01T00:00:00.000Z");
+    }
+
+    #[test]
+    fn log_levels() {
+        use tracing::Level;
+        assert_eq!(log_level(None), (Level::INFO, None));
+        assert_eq!(log_level(Some("")), (Level::INFO, None));
+        assert_eq!(log_level(Some("debug")), (Level::DEBUG, None));
+        assert_eq!(log_level(Some(" WARN ")), (Level::WARN, None));
+        assert_eq!(
+            log_level(Some("ferry=debug")),
+            (Level::INFO, Some("ferry=debug"))
+        );
     }
 
     #[test]

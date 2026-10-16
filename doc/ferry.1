@@ -287,12 +287,16 @@ Reopen log files, for use after log rotation.
 .SH ENVIRONMENT
 .TP
 .B FERRY_LOG
-Error log verbosity, e.g.
+Error log level: one of
+.BR error ,
+.BR warn ,
+.BR info ,
 .B debug
 or
-.BR warn .
+.BR trace .
 The default is
 .BR info .
+Any other value is ignored with a warning.
 .TP
 .B NO_COLOR
 If set, output is never coloured.

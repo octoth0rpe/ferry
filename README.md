@@ -236,7 +236,9 @@ file instead.
   user agent).
 
 The **error log** (startup, warnings, upstream failures, reloads) goes to
-stderr, or to `--error-log FILE`. Set `FERRY_LOG=debug` for more detail.
+stderr, or to `--error-log FILE`. Set `FERRY_LOG` to a level (`error`,
+`warn`, `info`, `debug` or `trace`) to change how much it says; the default
+is `info`.
 
 Every timestamp ferry writes, in both logs and all formats, is ISO 8601 in
 UTC with milliseconds: `2026-10-16T03:00:00.123Z`. (In `common` and
