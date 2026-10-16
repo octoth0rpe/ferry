@@ -359,7 +359,6 @@ dependencies = [
  "tower-service",
  "tracing",
  "tracing-subscriber",
- "x509-parser",
 ]
 
 [[package]]

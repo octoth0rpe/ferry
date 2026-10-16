@@ -11,6 +11,7 @@ use rustls::server::{ClientHello, ResolvesServerCert};
 use rustls::sign::CertifiedKey;
 
 use crate::config::CertKey;
+use crate::der;
 
 /// A certificate and key loaded from disk and checked to belong together.
 #[derive(Debug, Clone)]
@@ -58,10 +59,10 @@ pub fn from_der(
     cert_name: &str,
     key_name: &str,
 ) -> Result<LoadedCert, String> {
-    let (_, leaf) = x509_parser::parse_x509_certificate(&certs[0])
-        .map_err(|e| format!("{cert_name}: can't parse certificate: {e}"))?;
-    let not_after = leaf.validity().not_after.timestamp();
-    let self_signed = leaf.issuer() == leaf.subject();
+    let leaf =
+        der::parse(&certs[0]).ok_or_else(|| format!("{cert_name}: can't parse certificate"))?;
+    let not_after = leaf.not_after;
+    let self_signed = leaf.self_signed;
 
     let mut warnings = Vec::new();
     if certs.len() == 1 && !self_signed {
@@ -151,6 +152,33 @@ pub mod tests {
         assert!(loaded.warnings.is_empty());
         assert!(loaded.not_after > 0);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn warns_about_a_leaf_without_its_chain() {
+        let mut ca_params = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
+        ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        ca_params
+            .distinguished_name
+            .push(rcgen::DnType::CommonName, "Test CA");
+        let ca_key = rcgen::KeyPair::generate().unwrap();
+        let ca_cert = ca_params.self_signed(&ca_key).unwrap();
+        let ca = rcgen::Issuer::new(ca_params, ca_key);
+        let key = rcgen::KeyPair::generate().unwrap();
+        let leaf = rcgen::CertificateParams::new(vec!["example.com".to_string()])
+            .unwrap()
+            .signed_by(&key, &ca)
+            .unwrap();
+        let load = |certs: Vec<CertificateDer<'static>>| {
+            let key = PrivateKeyDer::try_from(key.serialize_der()).unwrap();
+            from_der(certs, key, "c.pem", "k.pem").unwrap()
+        };
+
+        let alone = load(vec![leaf.der().clone()]);
+        assert_eq!(alone.warnings.len(), 1);
+        assert!(alone.warnings[0].contains("only the server certificate"));
+        let chain = load(vec![leaf.der().clone(), ca_cert.der().clone()]);
+        assert!(chain.warnings.is_empty(), "{:?}", chain.warnings);
     }
 
     #[test]

@@ -38,6 +38,8 @@ All four must pass before every commit.
 - `upstream.rs`: hyper-util pooled clients for TCP and Unix sockets.
 - `tls.rs`, `selfsigned.rs`: cert loading and checks, and the persisted
   self-signed default.
+- `der.rs`: the few certificate fields ferry reads (notAfter, issuer ==
+  subject, SAN names). Not a general X.509 parser.
 - `log.rs`: access log (written when the response body finishes) and error
   log (tracing). `log::timestamp` is the one timestamp format: ISO 8601 UTC
   with milliseconds.

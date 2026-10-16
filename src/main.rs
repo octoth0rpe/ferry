@@ -4,6 +4,7 @@ mod cli;
 mod config;
 mod daemon;
 mod date;
+mod der;
 mod log;
 mod mapping;
 mod net;

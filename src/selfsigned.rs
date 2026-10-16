@@ -7,14 +7,17 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair};
 use time::{Duration, OffsetDateTime};
 
+use rustls::pki_types::CertificateDer;
+use rustls::pki_types::pem::PemObject;
+
 use crate::config::CertKey;
-use crate::net;
 use crate::tls::{self, LoadedCert};
+use crate::{der, net};
 
 /// Regenerate when the cert expires sooner than this.
 const RENEW_BEFORE_DAYS: i64 = 30;
@@ -161,29 +164,9 @@ fn write_file(path: &Path, contents: &[u8], mode: u32) -> Result<(), String> {
 }
 
 /// DNS names and IP addresses in a certificate's subjectAltName.
-fn cert_names(path: &PathBuf) -> Option<BTreeSet<String>> {
-    use x509_parser::extensions::GeneralName;
-    use x509_parser::pem::parse_x509_pem;
-
-    let pem_bytes = fs::read(path).ok()?;
-    let (_, pem) = parse_x509_pem(&pem_bytes).ok()?;
-    let cert = pem.parse_x509().ok()?;
-    let san = cert.subject_alternative_name().ok()??;
-    let names = san
-        .value
-        .general_names
-        .iter()
-        .filter_map(|name| match name {
-            GeneralName::DNSName(s) => Some(s.to_string()),
-            GeneralName::IPAddress(b) => match b.len() {
-                4 => Some(std::net::Ipv4Addr::from(<[u8; 4]>::try_from(*b).ok()?).to_string()),
-                16 => Some(std::net::Ipv6Addr::from(<[u8; 16]>::try_from(*b).ok()?).to_string()),
-                _ => None,
-            },
-            _ => None,
-        })
-        .collect();
-    Some(names)
+fn cert_names(path: &Path) -> Option<BTreeSet<String>> {
+    let cert = CertificateDer::from_pem_file(path).ok()?;
+    Some(der::parse(&cert)?.names.into_iter().collect())
 }
 
 #[cfg(test)]
