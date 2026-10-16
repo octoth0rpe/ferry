@@ -5,6 +5,7 @@
 //! log is everything else, via `tracing`. Both can go to stdout/stderr or a
 //! file, and both can be swapped or reopened while running.
 
+use std::fmt::Write as _;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::net::SocketAddr;
@@ -222,22 +223,23 @@ impl Entry {
                 escape(p.user_agent.as_deref().unwrap_or("-")),
                 self.request_id,
             ),
-            LogFormat::Json => serde_json::json!({
-                "time": time,
-                "remote_addr": ip.to_string(),
-                "method": p.method,
-                "path": p.path,
-                "protocol": proto,
-                "host": p.host,
-                "status": self.status,
-                "bytes": self.bytes,
-                "duration_ms": (ms * 10.0).round() / 10.0,
-                "request_id": self.request_id,
-                "upstream": self.upstream,
-                "referer": p.referer,
-                "user_agent": p.user_agent,
-            })
-            .to_string(),
+            LogFormat::Json => {
+                let mut o = JsonObject::new();
+                o.string("time", &time);
+                o.string("remote_addr", &ip.to_string());
+                o.string("method", &p.method);
+                o.string("path", &p.path);
+                o.string("protocol", proto);
+                o.option("host", p.host.as_deref());
+                o.number("status", self.status);
+                o.number("bytes", self.bytes);
+                o.number("duration_ms", format_args!("{ms:.1}"));
+                o.string("request_id", &self.request_id);
+                o.string("upstream", &self.upstream);
+                o.option("referer", p.referer.as_deref());
+                o.option("user_agent", p.user_agent.as_deref());
+                o.finish()
+            }
         }
     }
 }
@@ -270,6 +272,65 @@ fn escape(s: &str) -> String {
         }
     }
     out
+}
+
+/// Builds a one-line JSON object, with fields in the order they're added.
+struct JsonObject(String);
+
+impl JsonObject {
+    fn new() -> JsonObject {
+        JsonObject("{".into())
+    }
+
+    fn key(&mut self, key: &str) {
+        if self.0.len() > 1 {
+            self.0.push(',');
+        }
+        json_string(&mut self.0, key);
+        self.0.push(':');
+    }
+
+    fn string(&mut self, key: &str, value: &str) {
+        self.key(key);
+        json_string(&mut self.0, value);
+    }
+
+    fn option(&mut self, key: &str, value: Option<&str>) {
+        match value {
+            Some(v) => self.string(key, v),
+            None => {
+                self.key(key);
+                self.0.push_str("null");
+            }
+        }
+    }
+
+    /// `value` must display as a valid JSON number.
+    fn number(&mut self, key: &str, value: impl std::fmt::Display) {
+        self.key(key);
+        let _ = write!(self.0, "{value}");
+    }
+
+    fn finish(mut self) -> String {
+        self.0.push('}');
+        self.0
+    }
+}
+
+/// Appends `s` as a quoted JSON string.
+fn json_string(out: &mut String, s: &str) {
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            c if c.is_control() => {
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
 }
 
 /// A response body that counts bytes and writes the access log line when
@@ -469,6 +530,25 @@ mod tests {
             log_level(Some("ferry=debug")),
             (Level::INFO, Some("ferry=debug"))
         );
+    }
+
+    #[test]
+    fn json_escapes_awkward_strings() {
+        let mut e = entry();
+        e.pending.path = "/q?a=\"b\"&c=\\d".into();
+        e.pending.user_agent = Some("line\nbreak\ttab \u{7f}\u{85} café 日本 🚢".into());
+        e.pending.host = Some("\u{1}".into());
+        let line = e.format(LogFormat::Json);
+        assert!(!line.contains('\n'), "{line}");
+        let v: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(v["path"], "/q?a=\"b\"&c=\\d");
+        assert_eq!(
+            v["user_agent"],
+            "line\nbreak\ttab \u{7f}\u{85} café 日本 🚢"
+        );
+        assert_eq!(v["host"], "\u{1}");
+        assert!(v["duration_ms"].is_f64());
+        assert_eq!(v["bytes"], 1234);
     }
 
     #[test]
