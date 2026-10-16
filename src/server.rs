@@ -64,6 +64,8 @@ pub struct ListenerSpec {
 /// Everything [`build`] prepared, plus things worth telling the user.
 pub struct Plan {
     pub listeners: Vec<ListenerSpec>,
+    /// The access log all listeners write to.
+    pub log: Arc<AccessLogger>,
     pub warnings: Vec<String>,
     /// Set when any listener uses the self-signed certificate.
     pub self_signed: Option<selfsigned::SelfSigned>,
@@ -173,6 +175,7 @@ pub fn build(config: &Config) -> Result<Plan, Vec<String>> {
     if errors.is_empty() {
         Ok(Plan {
             listeners,
+            log,
             warnings,
             self_signed,
         })

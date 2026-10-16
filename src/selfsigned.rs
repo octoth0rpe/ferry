@@ -55,6 +55,15 @@ pub fn wanted_names() -> BTreeSet<String> {
     names
 }
 
+/// Whether the stored certificate is due to be replaced.
+pub fn expires_soon() -> bool {
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    match paths().and_then(|p| tls::load(&p)) {
+        Ok(cert) => cert.not_after - now < RENEW_BEFORE_DAYS * 86_400,
+        Err(_) => true,
+    }
+}
+
 /// Outcome of [`load_or_create`].
 pub struct SelfSigned {
     pub cert: LoadedCert,

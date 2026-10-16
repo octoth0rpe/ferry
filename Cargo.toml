@@ -20,6 +20,7 @@ hyper = { version = "1.12.0", features = ["http1", "http2", "server", "client"] 
 hyper-util = { version = "0.1.21", features = ["tokio", "server-auto", "client-legacy", "http1", "http2"] }
 jiff = "0.2.38"
 nix = { version = "0.31.3", features = ["net", "hostname", "signal", "process", "fs", "user"] }
+notify = "8.2"
 rcgen = { version = "0.14.7", default-features = false, features = ["ring", "pem"] }
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 serde = { version = "1.0.229", features = ["derive"] }
