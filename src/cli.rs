@@ -161,6 +161,25 @@ mod tests {
     }
 
     #[test]
+    fn man_page_documents_every_flag() {
+        let man = include_str!("../doc/ferry.1").replace("\\-", "-");
+        for arg in Cli::command().get_arguments() {
+            if let Some(long) = arg.get_long() {
+                assert!(
+                    man.contains(&format!("--{long}")),
+                    "doc/ferry.1 is missing --{long}"
+                );
+            }
+            if let Some(short) = arg.get_short() {
+                assert!(
+                    man.contains(&format!("-{short}")),
+                    "doc/ferry.1 is missing -{short}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn mappings_only() {
         let p = positionals(&["6005:6006", "7001:7002"]).unwrap();
         assert_eq!(p.cert_key, None);

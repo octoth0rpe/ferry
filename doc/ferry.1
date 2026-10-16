@@ -1,0 +1,322 @@
+.TH FERRY 1 2026-10-15 "ferry 0.1.0" "User Commands"
+.SH NAME
+ferry \- a very simple HTTPS reverse proxy
+.SH SYNOPSIS
+.B ferry
+.RI [ options ]
+.RI [ cert
+.IR key ]
+.IR mapping ...
+.br
+.B ferry
+.B \-c
+.I file
+.RI [ options ]
+.RI [ mapping ...]
+.br
+.B ferry \-t
+.RB [ \-c
+.IR file ]
+.RI [ cert
+.IR key ]
+.RI [ mapping ...]
+.SH DESCRIPTION
+.B ferry
+accepts HTTPS connections and forwards the requests over plain HTTP to an
+application on the same machine or elsewhere. It is meant to need no
+configuration for most uses: with no certificate it uses a self\-signed one
+it keeps between runs, it listens on IPv4 and IPv6, it redirects plain HTTP
+to HTTPS, and it passes WebSockets through.
+.PP
+Clients may use HTTP/2 or HTTP/1.1. Requests are forwarded to upstreams over
+HTTP/1.1, by TCP or a Unix domain socket, and bodies are streamed in both
+directions.
+.SH ARGUMENTS
+.TP
+.I cert key
+A PEM certificate chain and its unencrypted PEM private key. The certificate
+file should contain the full chain (for Let's Encrypt,
+.IR fullchain.pem ).
+Give both or neither. Without them, ferry uses its self\-signed certificate;
+see
+.BR CERTIFICATES .
+.TP
+.I mapping
+.IB listen : upstream \fR,
+where
+.I listen
+is
+.I port
+or
+.IB address : port
+and
+.I upstream
+is
+.IR port ,
+.IB host : port \fR,
+.BI http:// host\fR[\fB: port\fR],
+or a Unix socket path starting with
+.BR / ,
+.B ./
+or
+.BR ../ .
+A bare upstream port means
+.BR localhost ,
+which ferry tries as both ::1 and 127.0.0.1. IPv6 addresses are written in
+brackets. Without an address, ferry listens on all interfaces, IPv4 and IPv6.
+.RS
+.PP
+.nf
+6005:6006                https on 6005 \-> http://localhost:6006
+127.0.0.1:6005:6006      listen on 127.0.0.1 only
+6005:10.0.0.5:6006       forward to another host
+6005:/run/app.sock       forward to a Unix socket
+[::1]:6005:[::1]:6006    IPv6 on both sides
+.fi
+.RE
+.PP
+Arguments that look like mappings (containing
+.B :
+or a bare number) are mappings; the rest are the certificate and key.
+.SH OPTIONS
+.TP
+.BR \-c ", " \-\-config " " \fIfile\fR
+Read settings from the TOML file
+.IR file .
+Command\-line options override it, and mappings on the command line are
+added to its
+.B [[proxy]]
+entries. ferry watches the file and reloads it when it changes; see
+.BR RELOADING .
+.TP
+.BR \-t ", " \-\-test
+Check the configuration and exit. Reports every problem found: errors in the
+configuration (with file and line), certificates that cannot be loaded, do
+not match their key, or have expired; and, as warnings, certificates
+expiring within 14 days, listen ports already in use, and missing upstream
+sockets. Has no side effects. Exits 0 if there are no errors.
+.TP
+.B \-\-print\-config
+Print the effective configuration (file, options and defaults combined) as a
+TOML config file and exit. The output, saved and loaded with
+.BR \-c ,
+gives the same configuration.
+.TP
+.BI \-\-access\-log " file"
+Write the access log to
+.IR file .
+.B \-
+means standard output (the default);
+.B off
+disables it.
+.TP
+.BI \-\-error\-log " file"
+Write the error log to
+.IR file .
+.B \-
+means standard error (the default).
+.TP
+.BI \-\-log\-format " format"
+Access log format:
+.B combined
+(the default; Apache combined format followed by the request duration and
+request ID),
+.B common
+(Apache common log format), or
+.B json
+(one object per line).
+.TP
+.BR \-q ", " \-\-quiet
+Do not print the startup banner or write the access log to standard output.
+.TP
+.BI \-\-max\-body " size"
+Reject request bodies larger than
+.I size
+with 413 Payload Too Large. Accepts suffixes K, M and G (binary multiples).
+The default is no limit.
+.TP
+.B \-\-no\-redirect
+Do not redirect plain HTTP to HTTPS. Plain HTTP sent to an HTTPS port gets a
+400 response explaining the port expects HTTPS, and port 80 is not used.
+.TP
+.BR \-d ", " \-\-daemonize
+Run in the background. ferry checks the configuration, loads certificates and
+binds its ports first, so errors are still reported in the terminal and in
+the exit status. The banner is printed before ferry detaches. Logs that would
+go to the terminal are discarded, and ferry warns about this.
+.TP
+.BI \-\-pid\-file " file"
+Write the process ID to
+.I file
+and remove it on exit. ferry refuses to start if the file names a process
+that is still running. Works with or without
+.BR \-d .
+.TP
+.BI \-\-completions " shell"
+Print a completion script for
+.BR bash ,
+.BR zsh ,
+.BR fish ,
+.B elvish
+or
+.B powershell
+and exit.
+.TP
+.BR \-h ", " \-\-help
+Print a summary of options.
+.TP
+.BR \-V ", " \-\-version
+Print the version.
+.SH CONFIGURATION FILE
+The file is TOML. All keys are optional except that at least one
+.B [[proxy]]
+entry (or a mapping on the command line) is needed. Unknown keys are errors.
+Relative paths are resolved against the directory containing the file.
+.PP
+.nf
+.RS
+cert = "/etc/letsencrypt/live/example.com/fullchain.pem"
+key = "/etc/letsencrypt/live/example.com/privkey.pem"
+access_log = "/var/log/ferry/access.log"  # "\-", "off" or a path
+error_log = "/var/log/ferry/error.log"    # "\-" or a path
+log_format = "combined"                   # "common", "combined", "json"
+max_body = "10M"
+redirect = true
+
+[[proxy]]
+listen = 443                      # or "127.0.0.1:443", "[::1]:443"
+upstream = 3000                   # or "host:port", "http://host:port",
+                                  # or "/run/app.sock"
+
+[[proxy]]
+listen = 8443
+upstream = "/run/admin.sock"
+cert = "admin.pem"                # this listener's own certificate
+key = "admin.key"
+max_body = "100M"                 # this listener's own limit
+
+[advanced]                        # defaults shown
+connect_timeout = "5s"            # connecting to an upstream
+handshake_timeout = "15s"         # TLS handshake and request headers
+idle_timeout = "90s"              # idle keep\-alive connections
+shutdown_grace = "10s"            # in\-flight requests on shutdown
+.RE
+.fi
+.PP
+Durations accept ms, s, m and h suffixes or a plain number of seconds.
+.SH CERTIFICATES
+When no certificate is configured, ferry generates a self\-signed certificate
+on first use and stores it, with its key, in
+.I ~/Library/Application Support/ferry/
+on macOS and
+.I $XDG_DATA_HOME/ferry/
+(default
+.IR ~/.local/share/ferry/ )
+on Linux. It covers localhost, 127.0.0.1, ::1, the host name (and
+.IR hostname .local)
+and the machine's LAN IPv4 addresses, and is valid for 397 days. It is
+replaced when it is within 30 days of expiry or no longer covers the host
+name; a new IP address alone does not replace it, so trust given to it is
+kept. Browsers warn about it until it is trusted, for example on macOS with
+.BR security (1)
+.BR add\-trusted\-cert .
+.PP
+ferry serves the same certificate whatever name the client asks for.
+.SH RELOADING
+ferry watches the configuration file and every certificate and key file it
+uses (without
+.BR \-c ,
+the certificate files from the command line). Saves made by renaming a new
+file into place and symbolic link changes are both noticed. When one
+changes, or on
+.BR SIGHUP ,
+ferry loads and checks the configuration as
+.B \-t
+would. If it is valid it is applied in place: new listeners start, removed
+ones stop, and changed upstreams and certificates are used for new
+connections, while requests already in progress finish undisturbed. If it is
+not valid, the errors are logged and the running configuration is kept.
+.SH REQUESTS
+ferry forwards the method, path, query, body and headers, keeping the
+.B Host
+header. It removes hop\-by\-hop headers, sets
+.BR X\-Forwarded\-For ,
+.BR X\-Forwarded\-Proto ,
+.B X\-Forwarded\-Host
+and
+.BR X\-Forwarded\-Port ,
+and adds an
+.B X\-Request\-Id
+(passed to the upstream, returned to the client, and logged) unless the
+client sent one. HTTP/1.1 upgrades such as WebSockets are passed through.
+.PP
+Plain HTTP sent to an HTTPS port is redirected (308) to the same URL over
+HTTPS. If a mapping listens on port 443 and none uses port 80, ferry also
+listens on port 80 and redirects to HTTPS; if it cannot bind port 80, it
+warns and continues.
+.PP
+When an upstream cannot be reached, ferry answers 502 with a short
+explanation (HTML for browsers, plain text otherwise), or 504 if connecting
+timed out.
+.SH SIGNALS
+.TP
+.BR SIGTERM ", " SIGINT
+Stop accepting connections and exit once in\-flight requests finish, or
+after
+.I shutdown_grace
+(10 seconds by default). A second
+.B SIGINT
+exits immediately.
+.TP
+.B SIGHUP
+Reload the configuration and reopen log files.
+.TP
+.B SIGUSR1
+Reopen log files, for use after log rotation.
+.SH ENVIRONMENT
+.TP
+.B FERRY_LOG
+Error log verbosity, e.g.
+.B debug
+or
+.BR warn .
+The default is
+.BR info .
+.TP
+.B NO_COLOR
+If set, output is never coloured.
+.TP
+.BR HOME ", " XDG_DATA_HOME
+Where the self\-signed certificate is kept.
+.SH EXIT STATUS
+0 on a clean shutdown or a successful
+.BR \-t ;
+1 on errors in the configuration or at startup; 2 for invalid usage.
+.SH EXAMPLES
+HTTPS for a development server, with a self\-signed certificate:
+.PP
+.RS
+ferry 5173:5173
+.RE
+.PP
+A production certificate and two applications:
+.PP
+.RS
+ferry fullchain.pem privkey.pem 443:3000 8443:/run/admin.sock
+.RE
+.PP
+Turn a command line into a config file, check it, then run it in the
+background:
+.PP
+.RS
+.nf
+ferry \-\-print\-config 443:3000 \-\-max\-body 10M > ferry.toml
+ferry \-t \-c ferry.toml
+ferry \-d \-\-pid\-file ferry.pid \-\-access\-log access.log \e
+      \-\-error\-log error.log \-c ferry.toml
+.fi
+.RE
+.SH SEE ALSO
+.BR security (1),
+.BR systemd.service (5),
+.BR launchd.plist (5)
