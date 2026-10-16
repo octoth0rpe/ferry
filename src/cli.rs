@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 use clap::Parser;
 
+use crate::config::{CertKey, LogFormat};
 use crate::mapping::Mapping;
 
 const AFTER_HELP: &str = "\
@@ -19,33 +20,55 @@ Without CERT and KEY, ferry uses a self-signed certificate.
 
 Examples:
   ferry 6005:6006
-  ferry ./cert.pem ./key.pem 6005:6006 7001:7002";
+  ferry ./cert.pem ./key.pem 6005:6006 7001:7002
+  ferry -c ferry.toml";
 
 /// A very simple HTTPS reverse proxy.
 #[derive(Debug, Parser)]
 #[command(
     version,
     about,
-    override_usage = "ferry [OPTIONS] [<CERT> <KEY>] <MAPPING>...",
+    override_usage = "ferry [OPTIONS] [<CERT> <KEY>] <MAPPING>...\n       ferry -c <FILE> [OPTIONS]",
     after_help = AFTER_HELP
 )]
 pub struct Cli {
     /// Optional certificate and key files, followed by one or more mappings
     #[arg(value_name = "ARGS")]
     pub args: Vec<OsString>,
-}
 
-/// A certificate chain and its private key, both PEM files.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CertKey {
-    pub cert: PathBuf,
-    pub key: PathBuf,
+    /// Load settings from a TOML config file
+    #[arg(short, long, value_name = "FILE")]
+    pub config: Option<PathBuf>,
+
+    /// Access log file; `-` for stdout (default), `off` to disable
+    #[arg(long, value_name = "FILE")]
+    pub access_log: Option<String>,
+
+    /// Error log file; `-` for stderr (default)
+    #[arg(long, value_name = "FILE")]
+    pub error_log: Option<String>,
+
+    /// Access log format [default: combined]
+    #[arg(long, value_name = "FORMAT")]
+    pub log_format: Option<LogFormat>,
+
+    /// Don't print the startup banner or log requests to stdout
+    #[arg(short, long)]
+    pub quiet: bool,
+
+    /// Reject request bodies larger than this (e.g. 10M) [default: unlimited]
+    #[arg(long, value_name = "SIZE")]
+    pub max_body: Option<String>,
+
+    /// Don't redirect plain HTTP requests to HTTPS
+    #[arg(long)]
+    pub no_redirect: bool,
 }
 
 /// The positional arguments, sorted into what they mean.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Positionals {
-    /// `None` means use the default self-signed certificate.
+    /// `None` means no cert/key files were given.
     pub cert_key: Option<CertKey>,
     pub mappings: Vec<Mapping>,
 }
@@ -57,22 +80,11 @@ impl Cli {
     /// is parsed as one; the rest must be exactly zero or two files.
     pub fn positionals(&self) -> Result<Positionals, String> {
         let mut files = Vec::new();
-        let mut mappings: Vec<Mapping> = Vec::new();
+        let mut mappings = Vec::new();
 
         for arg in &self.args {
             match arg.to_str().filter(|s| looks_like_mapping(s)) {
-                Some(s) => {
-                    let mapping: Mapping = s.parse().map_err(|e| format!("{e}"))?;
-                    if let Some(other) = mappings.iter().find(|m| m.conflicts_with(&mapping)) {
-                        return Err(format!(
-                            "mappings `{}` and `{}` both listen on port {}",
-                            other.listen_display(),
-                            mapping.listen_display(),
-                            mapping.port
-                        ));
-                    }
-                    mappings.push(mapping);
-                }
+                Some(s) => mappings.push(s.parse::<Mapping>().map_err(|e| e.to_string())?),
                 None => files.push(PathBuf::from(arg)),
             }
         }
@@ -96,10 +108,6 @@ impl Cli {
                 ));
             }
         };
-
-        if mappings.is_empty() {
-            return Err("nothing to proxy; give at least one mapping, e.g. 6005:6006".into());
-        }
 
         Ok(Positionals { cert_key, mappings })
     }
@@ -125,7 +133,7 @@ mod tests {
     }
 
     #[test]
-    fn mappings_only_uses_self_signed() {
+    fn mappings_only() {
         let p = positionals(&["6005:6006", "7001:7002"]).unwrap();
         assert_eq!(p.cert_key, None);
         assert_eq!(p.mappings.len(), 2);
@@ -164,29 +172,10 @@ mod tests {
     }
 
     #[test]
-    fn no_mappings_is_an_error() {
-        assert!(positionals(&[]).unwrap_err().contains("nothing to proxy"));
-        assert!(
-            positionals(&["c", "k"])
-                .unwrap_err()
-                .contains("nothing to proxy")
-        );
-    }
-
-    #[test]
     fn bad_mapping_is_reported() {
         let e = positionals(&["6005:99999"]).unwrap_err();
         assert!(e.contains("invalid mapping `6005:99999`"), "{e}");
         let e = positionals(&["6005"]).unwrap_err();
         assert!(e.contains("e.g. 6005:6006"), "{e}");
-    }
-
-    #[test]
-    fn duplicate_listen_port_is_an_error() {
-        let e = positionals(&["6005:6006", "127.0.0.1:6005:7000"]).unwrap_err();
-        assert_eq!(
-            e,
-            "mappings `6005` and `127.0.0.1:6005` both listen on port 6005"
-        );
     }
 }

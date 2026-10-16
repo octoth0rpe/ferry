@@ -1,0 +1,42 @@
+# Example ferry config. Run with: ferry -c ferry.toml
+#
+# Everything is optional except at least one [[proxy]] section.
+# Relative paths are resolved against this file's directory.
+
+# Certificate chain and private key (PEM). Leave both out to use ferry's
+# self-signed certificate.
+# cert = "/etc/letsencrypt/live/example.com/fullchain.pem"
+# key  = "/etc/letsencrypt/live/example.com/privkey.pem"
+
+# Access log: a file path, "-" for stdout (default), or "off".
+# access_log = "/var/log/ferry/access.log"
+
+# Error log: a file path or "-" for stderr (default).
+# error_log = "/var/log/ferry/error.log"
+
+# Access log format: "combined" (default), "common", or "json".
+# log_format = "combined"
+
+# Reject request bodies larger than this. Default: unlimited.
+# max_body = "10M"
+
+# Redirect plain HTTP to HTTPS (on the same port, and 80 -> 443). Default: true.
+# redirect = true
+
+[[proxy]]
+listen = 6005              # or "127.0.0.1:6005", "[::1]:6005"
+upstream = 6006            # or "10.0.0.5:6006", "http://app:8080", "/run/app.sock"
+
+# [[proxy]]
+# listen = 7001
+# upstream = "/run/app.sock"
+# cert = "other-cert.pem"  # per-listener certificate
+# key  = "other-key.pem"
+# max_body = "100M"        # per-listener body limit
+
+# Settings almost nobody needs to change. Defaults shown.
+# [advanced]
+# connect_timeout   = "5s"   # connecting to an upstream
+# handshake_timeout = "15s"  # client TLS handshake and request headers
+# idle_timeout      = "90s"  # idle keep-alive connections
+# shutdown_grace    = "10s"  # in-flight requests on shutdown

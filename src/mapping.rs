@@ -92,61 +92,83 @@ impl FromStr for Mapping {
 }
 
 fn parse(s: &str) -> Result<Mapping, String> {
-    let (listen, upstream) = if let Some(i) = s.find("://") {
-        let (listen, scheme) = s[..i]
-            .rsplit_once(':')
-            .ok_or("expected a listen port before the upstream URL, e.g. 6005:http://app:8080")?;
-        let upstream = match scheme {
-            "http" => parse_http_upstream(&s[i + 3..])?,
-            "https" => return Err("https upstreams aren't supported yet".into()),
-            other => return Err(format!("unsupported upstream scheme `{other}`")),
-        };
-        (listen, upstream)
-    } else if let Some(i) = find_unix_path(s) {
-        let path = &s[i + 1..];
-        (&s[..i], Upstream::Unix(PathBuf::from(path)))
-    } else {
-        let parts = split_colons(s)?;
-        // Split the parts into listen and upstream halves. The only ambiguous
-        // case is three parts: `port:host:port` vs `bind:port:port`.
-        let n_listen = match parts.len() {
-            1 => {
-                return Err(format!(
-                    "expected LISTEN:UPSTREAM, e.g. {s}:{}",
-                    next_port(s)
-                ));
-            }
-            2 => 1,
-            3 if is_digits(parts[0]) => 1,
-            3 => 2,
-            4 => 2,
-            _ => return Err(too_many_parts()),
-        };
-        let upstream = match &parts[n_listen..] {
-            [port] => Upstream::Tcp {
-                host: DEFAULT_UPSTREAM_HOST.into(),
-                port: parse_port(port)?,
-            },
-            [host, port] => Upstream::Tcp {
-                host: parse_host(host)?,
-                port: parse_port(port)?,
-            },
-            _ => unreachable!(),
-        };
-        let (bind, port) = parse_listen(&parts[..n_listen])?;
-        return Ok(Mapping {
-            bind,
-            port,
-            upstream,
-        });
-    };
-
-    let (bind, port) = parse_listen(&split_colons(listen)?)?;
+    let (listen, upstream) = split_mapping(s)?;
+    let (bind, port) = parse_listen(listen)?;
     Ok(Mapping {
         bind,
         port,
-        upstream,
+        upstream: parse_upstream(upstream)?,
     })
+}
+
+/// Splits `LISTEN:UPSTREAM` into its two halves.
+fn split_mapping(s: &str) -> Result<(&str, &str), String> {
+    if let Some(i) = s.find("://") {
+        let colon = s[..i]
+            .rfind(':')
+            .ok_or("expected a listen port before the upstream URL, e.g. 6005:http://app:8080")?;
+        return Ok((&s[..colon], &s[colon + 1..]));
+    }
+    if let Some(i) = find_unix_path(s) {
+        return Ok((&s[..i], &s[i + 1..]));
+    }
+    let parts = split_colons(s)?;
+    // The only ambiguous case is three parts: `port:host:port` vs
+    // `bind:port:port`.
+    let n_listen = match parts.len() {
+        1 => {
+            return Err(format!(
+                "expected LISTEN:UPSTREAM, e.g. {s}:{}",
+                next_port(s)
+            ));
+        }
+        2 => 1,
+        3 if is_digits(parts[0]) => 1,
+        3 | 4 => 2,
+        _ => return Err(too_many_parts()),
+    };
+    let listen_len = parts[..n_listen].iter().map(|p| p.len() + 1).sum::<usize>() - 1;
+    Ok((&s[..listen_len], &s[listen_len + 1..]))
+}
+
+/// Parses the listen half of a mapping: `PORT` or `ADDR:PORT`.
+pub fn parse_listen(s: &str) -> Result<(Option<IpAddr>, u16), String> {
+    match split_colons(s)?.as_slice() {
+        [port] => Ok((None, parse_port(port)?)),
+        [bind, port] => Ok((Some(parse_bind(bind)?), parse_port(port)?)),
+        _ => Err(too_many_parts()),
+    }
+}
+
+/// Parses the upstream half of a mapping: `PORT`, `HOST:PORT`,
+/// `http://HOST[:PORT]`, or a Unix socket path.
+pub fn parse_upstream(s: &str) -> Result<Upstream, String> {
+    if let Some((scheme, rest)) = s.split_once("://") {
+        return match scheme {
+            "http" => parse_http_upstream(rest),
+            "https" => Err("https upstreams aren't supported yet".into()),
+            other => Err(format!("unsupported upstream scheme `{other}`")),
+        };
+    }
+    if is_unix_path(s) {
+        return Ok(Upstream::Unix(PathBuf::from(s)));
+    }
+    match split_colons(s)?.as_slice() {
+        [port] if is_digits(port) => Ok(Upstream::Tcp {
+            host: DEFAULT_UPSTREAM_HOST.into(),
+            port: parse_port(port)?,
+        }),
+        [host] => Err(format!("upstream `{host}` needs a port, e.g. {host}:8080")),
+        [host, port] => Ok(Upstream::Tcp {
+            host: parse_host(host)?,
+            port: parse_port(port)?,
+        }),
+        _ => Err(too_many_parts()),
+    }
+}
+
+fn is_unix_path(s: &str) -> bool {
+    s.starts_with('/') || s.starts_with("./") || s.starts_with("../")
 }
 
 /// Index of the `:` that starts a Unix socket path (`:/`, `:./`, `:../`).
@@ -155,14 +177,6 @@ fn find_unix_path(s: &str) -> Option<usize> {
         .iter()
         .filter_map(|pat| s.find(pat))
         .min()
-}
-
-fn parse_listen(parts: &[&str]) -> Result<(Option<IpAddr>, u16), String> {
-    match parts {
-        [port] => Ok((None, parse_port(port)?)),
-        [bind, port] => Ok((Some(parse_bind(bind)?), parse_port(port)?)),
-        _ => Err(too_many_parts()),
-    }
 }
 
 /// Parses the part of an `http://` URL after the scheme: `host[:port][/]`.
@@ -388,6 +402,22 @@ mod tests {
         assert!(err("6005:ftp://app").contains("unsupported upstream scheme"));
         assert!(err("6005:http://app/path").contains("can't include a path"));
         assert!(err("1:2:3:4:5").contains("too many"));
+    }
+
+    #[test]
+    fn halves() {
+        assert_eq!(parse_listen("6005").unwrap(), (None, 6005));
+        assert_eq!(
+            parse_listen("[::1]:6005").unwrap(),
+            (Some("::1".parse().unwrap()), 6005)
+        );
+        assert_eq!(parse_upstream("6006").unwrap(), tcp("localhost", 6006));
+        assert_eq!(parse_upstream("app:80").unwrap(), tcp("app", 80));
+        assert_eq!(
+            parse_upstream("./a.sock").unwrap(),
+            Upstream::Unix("./a.sock".into())
+        );
+        assert!(parse_upstream("app").unwrap_err().contains("needs a port"));
     }
 
     #[test]
