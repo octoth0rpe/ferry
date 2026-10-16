@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context, Poll, ready};
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use arc_swap::ArcSwap;
 use bytes::Bytes;
@@ -22,6 +22,7 @@ use http_body_util::BodyExt;
 use hyper::body::{Frame, SizeHint};
 
 use crate::config::{AccessLog, Config, ErrorLog, LogFormat};
+use crate::date;
 use crate::upstream::{Body, BoxError};
 
 /// Where log lines go.
@@ -120,7 +121,7 @@ impl AccessLogger {
 /// What's known about a request when it arrives.
 pub struct Pending {
     start: Instant,
-    time: jiff::Timestamp,
+    time: SystemTime,
     peer: SocketAddr,
     method: String,
     path: String,
@@ -140,7 +141,7 @@ impl Pending {
         };
         Pending {
             start: Instant::now(),
-            time: jiff::Timestamp::now(),
+            time: SystemTime::now(),
             peer,
             method: req.method().to_string(),
             path: req
@@ -244,8 +245,9 @@ impl Entry {
 
 /// Formats a time the way ferry writes every timestamp: ISO 8601, UTC,
 /// milliseconds. `2026-10-16T03:00:00.123Z`
-pub fn timestamp(t: jiff::Timestamp) -> String {
-    t.strftime("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
+pub fn timestamp(t: SystemTime) -> String {
+    let d = t.duration_since(UNIX_EPOCH).unwrap_or_default();
+    date::timestamp(d.as_secs() as i64, d.subsec_millis())
 }
 
 /// Timestamps for the error log, in the same format as the access log.
@@ -253,7 +255,7 @@ struct IsoTime;
 
 impl tracing_subscriber::fmt::time::FormatTime for IsoTime {
     fn format_time(&self, w: &mut tracing_subscriber::fmt::format::Writer<'_>) -> std::fmt::Result {
-        w.write_str(&timestamp(jiff::Timestamp::now()))
+        w.write_str(&timestamp(SystemTime::now()))
     }
 }
 
@@ -375,6 +377,8 @@ impl Drop for ErrorWriter {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
 
     fn entry() -> Entry {
@@ -386,7 +390,8 @@ mod tests {
             .body(())
             .unwrap();
         let mut pending = Pending::new(&req, "10.0.0.1:5000".parse().unwrap());
-        pending.time = "2026-10-16T03:00:00.042Z".parse().unwrap();
+        // 2026-10-16T03:00:00.042Z
+        pending.time = UNIX_EPOCH + Duration::from_millis(1_792_119_600_042);
         Entry {
             pending,
             status: 200,
@@ -427,8 +432,9 @@ mod tests {
 
     #[test]
     fn timestamps_are_iso8601_utc_with_milliseconds() {
-        let t: jiff::Timestamp = "2026-10-15T23:00:00.5-04:00".parse().unwrap();
+        let t = UNIX_EPOCH + Duration::from_millis(1_792_119_600_500);
         assert_eq!(timestamp(t), "2026-10-16T03:00:00.500Z");
+        assert_eq!(timestamp(UNIX_EPOCH), "1970-01-01T00:00:00.000Z");
     }
 
     #[test]

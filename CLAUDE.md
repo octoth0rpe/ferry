@@ -41,6 +41,8 @@ All four must pass before every commit.
 - `log.rs`: access log (written when the response body finishes) and error
   log (tracing). `log::timestamp` is the one timestamp format: ISO 8601 UTC
   with milliseconds.
+- `date.rs`: UTC civil-date arithmetic (days ↔ y/m/d) and formatting. No
+  time zones: ferry writes everything in UTC.
 - `check.rs` (`-t`), `banner.rs`, `watch.rs` (reload triggers), `daemon.rs`
   (`-d`, pid file), `net.rs` (binding).
 

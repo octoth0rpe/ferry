@@ -5,7 +5,7 @@ use std::os::unix::fs::FileTypeExt;
 
 use crate::config::Config;
 use crate::mapping::Upstream;
-use crate::{net, selfsigned, tls};
+use crate::{date, net, selfsigned, tls};
 
 /// Warn about certificates expiring sooner than this.
 const EXPIRY_WARNING_DAYS: i64 = 14;
@@ -22,7 +22,7 @@ pub struct Report {
 /// listen ports are free.
 pub fn check(config: &Config) -> Report {
     let mut report = Report::default();
-    let now = jiff::Timestamp::now().as_second();
+    let now = date::now();
 
     let mut seen = HashSet::new();
     for l in &config.listeners {
@@ -34,9 +34,7 @@ pub fn check(config: &Config) -> Report {
             Some(ck) => match tls::load(ck) {
                 Ok(cert) => {
                     report.warnings.extend(cert.warnings);
-                    let date = jiff::Timestamp::from_second(cert.not_after)
-                        .map(|t| t.strftime("%Y-%m-%d").to_string())
-                        .unwrap_or_default();
+                    let date = date::date(cert.not_after);
                     let days = (cert.not_after - now) / 86_400;
                     if cert.not_after <= now {
                         report

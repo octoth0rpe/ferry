@@ -3,6 +3,7 @@ mod check;
 mod cli;
 mod config;
 mod daemon;
+mod date;
 mod log;
 mod mapping;
 mod net;
