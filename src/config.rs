@@ -33,6 +33,8 @@ pub struct Config {
     /// Default request body limit in bytes; `None` means unlimited.
     pub max_body: Option<u64>,
     pub redirect: bool,
+    /// Where to write the process id, if anywhere.
+    pub pid_file: Option<PathBuf>,
     pub advanced: Advanced,
     /// Absolute path of the config file, if one was used.
     pub config_path: Option<PathBuf>,
@@ -104,6 +106,7 @@ impl Default for Config {
             quiet: false,
             max_body: None,
             redirect: true,
+            pid_file: None,
             advanced: Advanced::default(),
             config_path: None,
         }
@@ -173,6 +176,9 @@ impl Config {
                 Ok(n) => config.max_body = Some(n),
                 Err(e) => errors.push(format!("--max-body: {e}")),
             }
+        }
+        if let Some(p) = &cli.pid_file {
+            config.pid_file = Some(absolute(&cwd.join(p)));
         }
         config.quiet = cli.quiet;
         if cli.no_redirect {
@@ -269,6 +275,7 @@ impl Config {
             log_format: self.log_format.to_string(),
             max_body: self.max_body.map(format_size),
             redirect: self.redirect,
+            pid_file: self.pid_file.as_deref().map(path),
             proxy: self
                 .listeners
                 .iter()
@@ -328,6 +335,8 @@ struct OutConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     max_body: Option<String>,
     redirect: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pid_file: Option<String>,
     proxy: Vec<OutProxy>,
     #[serde(skip_serializing_if = "Option::is_none")]
     advanced: Option<OutAdvanced>,
@@ -367,6 +376,7 @@ struct FileConfig {
     log_format: Option<LogFormat>,
     max_body: Option<Spanned<toml::Value>>,
     redirect: Option<bool>,
+    pid_file: Option<String>,
     #[serde(default)]
     proxy: Vec<Spanned<FileProxy>>,
     #[serde(default)]
@@ -436,6 +446,9 @@ fn load_file(path: &Path) -> Result<Config, Vec<String>> {
     }
     if let Some(redirect) = file.redirect {
         config.redirect = redirect;
+    }
+    if let Some(p) = file.pid_file {
+        config.pid_file = Some(absolute(&base.join(p)));
     }
 
     for entry in file.proxy {
@@ -713,6 +726,7 @@ access_log = "logs/access.log"
 error_log = "-"
 log_format = "json"
 redirect = false
+pid_file = "run/ferry.pid"
 
 [[proxy]]
 listen = 6005
@@ -746,6 +760,7 @@ idle_timeout = 30
         assert_eq!(c.error_log, ErrorLog::Stderr);
         assert_eq!(c.log_format, LogFormat::Json);
         assert!(!c.redirect);
+        assert_eq!(c.pid_file, Some(base.join("run/ferry.pid")));
         assert_eq!(c.listeners.len(), 3);
         assert_eq!(c.listeners[0].mapping.port, 6005);
         assert_eq!(
@@ -796,6 +811,16 @@ idle_timeout = 30
         let e = r.unwrap_err().join("\n");
         assert!(e.contains("unknown field `upstraem`"), "{e}");
         assert!(e.contains("line 4"), "{e}");
+    }
+
+    #[test]
+    fn cli_pid_file_overrides_file_and_is_relative_to_cwd() {
+        let (_dir, c) = load_toml(
+            "pid_file = \"a.pid\"\n[[proxy]]\nlisten = 1\nupstream = 2\n",
+            &["--pid-file", "b.pid"],
+        );
+        let cwd = std::env::current_dir().unwrap();
+        assert_eq!(c.unwrap().pid_file, Some(cwd.join("b.pid")));
     }
 
     #[test]
@@ -863,6 +888,7 @@ max_body = "10M"
 access_log = "access.log"
 log_format = "json"
 redirect = false
+pid_file = "ferry.pid"
 
 [[proxy]]
 listen = "[::1]:6005"

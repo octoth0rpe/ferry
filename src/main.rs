@@ -80,10 +80,7 @@ fn main() -> ExitCode {
         Err(errors) => return fail(errors),
     };
 
-    let pid_path = cli
-        .pid_file
-        .as_ref()
-        .map(|p| config::absolute(&cwd.join(p)));
+    let pid_path = config.pid_file.clone();
     if let Some(path) = &pid_path
         && let Err(e) = daemon::check_pid_file(path)
     {

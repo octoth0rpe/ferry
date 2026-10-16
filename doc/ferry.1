@@ -150,7 +150,9 @@ go to the terminal are discarded, and ferry warns about this.
 .BI \-\-pid\-file " file"
 Write the process ID to
 .I file
-and remove it on exit. ferry refuses to start if the file names a process
+and remove it on exit. Overrides
+.B pid_file
+in the configuration file. ferry refuses to start if the file names a process
 that is still running. Works with or without
 .BR \-d .
 .TP
@@ -173,7 +175,13 @@ Print the version.
 The file is TOML. All keys are optional except that at least one
 .B [[proxy]]
 entry (or a mapping on the command line) is needed. Unknown keys are errors.
-Relative paths are resolved against the directory containing the file.
+Every path in the file (certificates, logs, the pid file and Unix socket
+upstreams) may be relative, and is resolved against the directory containing
+the file. Options that are about how ferry is run rather than what it serves
+.RB ( \-d ,
+.BR \-q ,
+.BR \-t )
+are command\-line only.
 .PP
 .nf
 .RS
@@ -184,6 +192,7 @@ error_log = "/var/log/ferry/error.log"    # "\-" or a path
 log_format = "combined"                   # "common", "combined", "json"
 max_body = "10M"
 redirect = true
+pid_file = "/run/ferry/ferry.pid"
 
 [[proxy]]
 listen = 443                      # or "127.0.0.1:443", "[::1]:443"

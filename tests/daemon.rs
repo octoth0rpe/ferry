@@ -40,14 +40,11 @@ async fn daemonizes_writes_pid_file_and_keeps_relative_paths() {
     let port = free_port();
     std::fs::write(
         dir.path("ferry.toml"),
-        format!("access_log = \"logs/access.log\"\nerror_log = \"logs/error.log\"\n[[proxy]]\nlisten = {port}\nupstream = {}\n", free_port()),
+        format!("access_log = \"logs/access.log\"\nerror_log = \"logs/error.log\"\npid_file = \"run/ferry.pid\"\n[[proxy]]\nlisten = {port}\nupstream = {}\n", free_port()),
     )
     .unwrap();
 
-    let out = ferry_in(
-        &dir,
-        &["-d", "--pid-file", "run/ferry.pid", "-c", "ferry.toml"],
-    );
+    let out = ferry_in(&dir, &["-d", "-c", "ferry.toml"]);
     assert!(
         out.status.success(),
         "{}",
@@ -79,7 +76,7 @@ async fn daemonizes_writes_pid_file_and_keeps_relative_paths() {
     // Reload after the daemon changed directory still resolves paths.
     std::fs::write(
         dir.path("ferry.toml"),
-        format!("access_log = \"logs/access.log\"\nerror_log = \"logs/error.log\"\n[[proxy]]\nlisten = {port}\nupstream = {up}\n"),
+        format!("access_log = \"logs/access.log\"\nerror_log = \"logs/error.log\"\npid_file = \"run/ferry.pid\"\n[[proxy]]\nlisten = {port}\nupstream = {up}\n"),
     )
     .unwrap();
     Command::new("kill")

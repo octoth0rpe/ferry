@@ -145,8 +145,11 @@ sudo update-ca-certificates
 ## Config file
 
 Everything that can be set on the command line can also go in a TOML file,
-plus a few rarely needed settings. Every key is optional except at least one
-`[[proxy]]`. Relative paths are resolved against the config file's directory.
+plus a few rarely needed settings. The exceptions are `-d`, `-q` and `-t`,
+which are about how you run ferry rather than what it serves. Every key is
+optional except at least one `[[proxy]]`. Every path in the file (certificates,
+logs, the pid file and Unix sockets) can be relative, and relative paths are
+resolved against the config file's directory.
 
 ```toml
 cert = "/etc/letsencrypt/live/example.com/fullchain.pem"
@@ -157,6 +160,7 @@ error_log  = "/var/log/ferry/error.log"    # "-" = stderr (default)
 log_format = "combined"                    # "common", "combined", "json"
 max_body   = "10M"                         # default: unlimited
 redirect   = true                          # default: true
+pid_file   = "/run/ferry/ferry.pid"        # default: none
 
 [[proxy]]
 listen   = 443
@@ -257,15 +261,26 @@ that parse those formats need their date format set accordingly.)
 ## Running in the background
 
 ```sh
-ferry -d --pid-file /run/ferry.pid --access-log /var/log/ferry/access.log \
-      --error-log /var/log/ferry/error.log -c /etc/ferry/ferry.toml
+ferry -d -c /etc/ferry/ferry.toml
 ```
+
+with `pid_file`, `access_log` and `error_log` set in the config file, or all
+on the command line:
+
+```sh
+ferry -d --pid-file ferry.pid --access-log access.log --error-log error.log 443:3000
+```
+
+Relative paths on the command line are resolved against the directory you
+start ferry in.
 
 `-d` checks the configuration and binds the ports before going into the
 background. Startup errors still appear in your terminal and the exit status
 reflects them. ferry warns if logs would go to the terminal, since they'd be
-discarded. `--pid-file` also works without `-d`. ferry refuses to start if
-the pid file names a running process, and removes the file on exit.
+discarded. The pid file (`pid_file`, or `--pid-file`) also works without `-d`.
+ferry refuses to start if the pid file names a running process, and removes
+the file on exit. `-d` is deliberately command-line only, so a config file
+used under systemd or launchd can't make ferry fork by accident.
 
 ### systemd
 

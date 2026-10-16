@@ -24,6 +24,10 @@
 # Reject request bodies larger than this. Default: unlimited.
 # max_body = "10M"
 
+# Write the process id here, and remove it on exit. Default: no pid file.
+# (Running in the background is -d, on the command line only.)
+# pid_file = "/run/ferry/ferry.pid"
+
 # Redirect plain HTTP to HTTPS (on the same port, and 80 -> 443). Default: true.
 # redirect = true
 
