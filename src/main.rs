@@ -2,6 +2,7 @@
 #![allow(dead_code)]
 
 mod banner;
+mod check;
 mod cli;
 mod config;
 mod log;
@@ -25,8 +26,19 @@ fn main() -> ExitCode {
     let cli = cli::Cli::parse();
     let config = match Config::load(&cli) {
         Ok(c) => c,
-        Err(errors) => return fail(errors),
+        Err(errors) => {
+            if cli.test {
+                println!("configuration: {} error(s)", errors.len());
+            }
+            return fail(errors);
+        }
     };
+    if cli.test {
+        return match check::check(&config).print(&config) {
+            true => ExitCode::SUCCESS,
+            false => ExitCode::FAILURE,
+        };
+    }
     if let Err(e) = log::set_error_log(&config.error_log) {
         let config::ErrorLog::File(path) = &config.error_log else {
             unreachable!("only files can fail to open")

@@ -8,29 +8,34 @@ use socket2::{Domain, Protocol, Socket, Type};
 /// Binds a listening TCP socket. With no address, binds `[::]` accepting both
 /// IPv4 and IPv6, falling back to `0.0.0.0` on hosts without IPv6.
 pub fn bind(bind: Option<IpAddr>, port: u16) -> io::Result<TcpListener> {
-    match bind {
-        Some(ip) => bind_addr(SocketAddr::new(ip, port), None),
-        None => {
-            match bind_addr(
-                SocketAddr::new(Ipv6Addr::UNSPECIFIED.into(), port),
-                Some(false),
-            ) {
-                Ok(l) => Ok(l),
-                Err(e)
-                    if matches!(
-                        e.kind(),
-                        io::ErrorKind::AddrInUse | io::ErrorKind::PermissionDenied
-                    ) =>
-                {
-                    Err(e)
-                }
-                Err(e) => {
-                    tracing::debug!("IPv6 unavailable ({e}); listening on IPv4 only");
-                    bind_addr(SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), port), None)
-                }
-            }
+    let v4_any = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), port);
+    let Some(ip) = bind else {
+        // macOS lets a dual-stack socket bind even when another process has
+        // 0.0.0.0 on the same port, and then IPv4 clients reach the other
+        // process. Check the IPv4 side is free first.
+        if port != 0 {
+            drop(bind_addr(v4_any, None)?);
         }
-    }
+        return match bind_addr(
+            SocketAddr::new(Ipv6Addr::UNSPECIFIED.into(), port),
+            Some(false),
+        ) {
+            Ok(l) => Ok(l),
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::AddrInUse | io::ErrorKind::PermissionDenied
+                ) =>
+            {
+                Err(e)
+            }
+            Err(e) => {
+                tracing::debug!("IPv6 unavailable ({e}); listening on IPv4 only");
+                bind_addr(v4_any, None)
+            }
+        };
+    };
+    bind_addr(SocketAddr::new(ip, port), None)
 }
 
 fn bind_addr(addr: SocketAddr, only_v6: Option<bool>) -> io::Result<TcpListener> {
@@ -102,6 +107,16 @@ mod tests {
             // IPv6 loopback can be missing in containers; only IPv4 is required.
             eprintln!("note: no IPv6 loopback");
         }
+    }
+
+    #[test]
+    fn default_bind_notices_ipv4_conflicts() {
+        let other = TcpListener::bind("0.0.0.0:0").unwrap();
+        let port = other.local_addr().unwrap().port();
+        assert_eq!(
+            bind(None, port).unwrap_err().kind(),
+            io::ErrorKind::AddrInUse
+        );
     }
 
     #[test]

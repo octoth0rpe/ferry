@@ -40,6 +40,10 @@ pub struct Cli {
     #[arg(short, long, value_name = "FILE")]
     pub config: Option<PathBuf>,
 
+    /// Check the configuration and exit
+    #[arg(short, long)]
+    pub test: bool,
+
     /// Access log file; `-` for stdout (default), `off` to disable
     #[arg(long, value_name = "FILE")]
     pub access_log: Option<String>,
