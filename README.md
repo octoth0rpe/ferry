@@ -60,6 +60,10 @@ cd ferry
 cargo install --path .
 ```
 
+This installs to `~/.cargo/bin/ferry`, which rustup puts on your `PATH`. To
+install somewhere else, pass `--root`: `cargo install --path . --root
+/usr/local` installs to `/usr/local/bin/ferry`.
+
 Or run `cargo build --release`; the binary is at `target/release/ferry`.
 
 ## Quick start
