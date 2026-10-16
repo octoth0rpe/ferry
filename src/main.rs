@@ -33,6 +33,10 @@ fn main() -> ExitCode {
             return fail(errors);
         }
     };
+    if cli.print_config {
+        print!("{}", config.to_toml());
+        return ExitCode::SUCCESS;
+    }
     if cli.test {
         return match check::check(&config).print(&config) {
             true => ExitCode::SUCCESS,

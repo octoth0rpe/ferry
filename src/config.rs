@@ -8,7 +8,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use toml::Spanned;
 
 use crate::cli::Cli;
@@ -229,6 +229,124 @@ impl fmt::Display for LogFormat {
             LogFormat::Json => "json",
         })
     }
+}
+
+impl Config {
+    /// The configuration as a TOML config file that loads back to the same
+    /// thing (`ferry --print-config ... > ferry.toml`). Advanced settings
+    /// are only included where they differ from the defaults.
+    pub fn to_toml(&self) -> String {
+        let path = |p: &Path| p.display().to_string();
+        let (cert, key) = cert_key_out(self.cert_key.as_ref());
+        let defaults = Advanced::default();
+        let changed = |v: Duration, d: Duration| (v != d).then(|| format_duration(v));
+        let advanced = OutAdvanced {
+            connect_timeout: changed(self.advanced.connect_timeout, defaults.connect_timeout),
+            handshake_timeout: changed(self.advanced.handshake_timeout, defaults.handshake_timeout),
+            idle_timeout: changed(self.advanced.idle_timeout, defaults.idle_timeout),
+            shutdown_grace: changed(self.advanced.shutdown_grace, defaults.shutdown_grace),
+        };
+        let out = OutConfig {
+            cert,
+            key,
+            access_log: match &self.access_log {
+                AccessLog::Stdout => "-".into(),
+                AccessLog::Off => "off".into(),
+                AccessLog::File(p) => path(p),
+            },
+            error_log: match &self.error_log {
+                ErrorLog::Stderr => "-".into(),
+                ErrorLog::File(p) => path(p),
+            },
+            log_format: self.log_format.to_string(),
+            max_body: self.max_body.map(format_size),
+            redirect: self.redirect,
+            proxy: self
+                .listeners
+                .iter()
+                .map(|l| {
+                    let (cert, key) = cert_key_out(l.cert_key.as_ref());
+                    let m = &l.mapping;
+                    OutProxy {
+                        listen: match m.bind {
+                            None => toml::Value::Integer(m.port.into()),
+                            Some(_) => toml::Value::String(m.listen_display()),
+                        },
+                        upstream: match &m.upstream {
+                            Upstream::Tcp { host, port }
+                                if host == mapping::DEFAULT_UPSTREAM_HOST =>
+                            {
+                                toml::Value::Integer((*port).into())
+                            }
+                            Upstream::Tcp { host, port } if host.contains(':') => {
+                                toml::Value::String(format!("[{host}]:{port}"))
+                            }
+                            Upstream::Tcp { host, port } => {
+                                toml::Value::String(format!("{host}:{port}"))
+                            }
+                            Upstream::Unix(p) => toml::Value::String(path(p)),
+                        },
+                        cert,
+                        key,
+                        max_body: l.max_body.map(format_size),
+                    }
+                })
+                .collect(),
+            advanced: (advanced != OutAdvanced::default()).then_some(advanced),
+        };
+        toml::to_string(&out).expect("config serializes to TOML")
+    }
+}
+
+fn cert_key_out(ck: Option<&CertKey>) -> (Option<String>, Option<String>) {
+    match ck {
+        Some(ck) => (
+            Some(ck.cert.display().to_string()),
+            Some(ck.key.display().to_string()),
+        ),
+        None => (None, None),
+    }
+}
+
+#[derive(Serialize)]
+struct OutConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cert: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    key: Option<String>,
+    access_log: String,
+    error_log: String,
+    log_format: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_body: Option<String>,
+    redirect: bool,
+    proxy: Vec<OutProxy>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    advanced: Option<OutAdvanced>,
+}
+
+#[derive(Serialize)]
+struct OutProxy {
+    listen: toml::Value,
+    upstream: toml::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cert: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_body: Option<String>,
+}
+
+#[derive(Serialize, Default, PartialEq)]
+struct OutAdvanced {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    connect_timeout: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    handshake_timeout: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    idle_timeout: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    shutdown_grace: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -714,6 +832,52 @@ idle_timeout = 30
     fn missing_file() {
         let e = load(&["-c", "/nonexistent/ferry.toml"]).unwrap_err();
         assert!(e[0].starts_with("/nonexistent/ferry.toml: "), "{e:?}");
+    }
+
+    #[test]
+    fn print_config_round_trips() {
+        let (dir, original) = load_toml(
+            r#"
+cert = "c.pem"
+key = "k.pem"
+max_body = "10M"
+access_log = "access.log"
+log_format = "json"
+redirect = false
+
+[[proxy]]
+listen = "[::1]:6005"
+upstream = "[fe80::1]:6006"
+max_body = 1000
+
+[[proxy]]
+listen = 7001
+upstream = "./app.sock"
+cert = "o.pem"
+key = "o.key"
+
+[advanced]
+idle_timeout = "2m"
+"#,
+            &["127.0.0.1:8000:9000", "8001:app:80"],
+        );
+        let original = original.unwrap();
+        let printed = original.to_toml();
+        let path = dir.file("printed.toml", &printed);
+        let reloaded = load(&["-c", path.to_str().unwrap()]).unwrap();
+        assert_eq!(
+            Config {
+                config_path: None,
+                ..reloaded
+            },
+            Config {
+                config_path: None,
+                ..original
+            },
+            "{printed}"
+        );
+        assert!(printed.contains("idle_timeout = \"2m\""), "{printed}");
+        assert!(!printed.contains("connect_timeout"), "{printed}");
     }
 
     #[test]

@@ -44,6 +44,10 @@ pub struct Cli {
     #[arg(short, long)]
     pub test: bool,
 
+    /// Print the effective configuration as a TOML config file and exit
+    #[arg(long)]
+    pub print_config: bool,
+
     /// Access log file; `-` for stdout (default), `off` to disable
     #[arg(long, value_name = "FILE")]
     pub access_log: Option<String>,
