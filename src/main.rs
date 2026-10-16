@@ -24,6 +24,10 @@ use crate::server::Server;
 
 fn main() -> ExitCode {
     let cli = cli::Cli::parse();
+    if let Some(shell) = cli.completions {
+        cli::Cli::print_completions(shell);
+        return ExitCode::SUCCESS;
+    }
     let config = match Config::load(&cli) {
         Ok(c) => c,
         Err(errors) => {

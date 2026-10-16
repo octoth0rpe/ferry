@@ -3,7 +3,7 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-use clap::Parser;
+use clap::{Parser, ValueHint};
 
 use crate::config::{CertKey, LogFormat};
 use crate::mapping::Mapping;
@@ -33,11 +33,11 @@ Examples:
 )]
 pub struct Cli {
     /// Optional certificate and key files, followed by one or more mappings
-    #[arg(value_name = "ARGS")]
+    #[arg(value_name = "ARGS", value_hint = ValueHint::FilePath)]
     pub args: Vec<OsString>,
 
     /// Load settings from a TOML config file
-    #[arg(short, long, value_name = "FILE")]
+    #[arg(short, long, value_name = "FILE", value_hint = ValueHint::FilePath)]
     pub config: Option<PathBuf>,
 
     /// Check the configuration and exit
@@ -49,11 +49,11 @@ pub struct Cli {
     pub print_config: bool,
 
     /// Access log file; `-` for stdout (default), `off` to disable
-    #[arg(long, value_name = "FILE")]
+    #[arg(long, value_name = "FILE", value_hint = ValueHint::FilePath)]
     pub access_log: Option<String>,
 
     /// Error log file; `-` for stderr (default)
-    #[arg(long, value_name = "FILE")]
+    #[arg(long, value_name = "FILE", value_hint = ValueHint::FilePath)]
     pub error_log: Option<String>,
 
     /// Access log format [default: combined]
@@ -71,6 +71,18 @@ pub struct Cli {
     /// Don't redirect plain HTTP requests to HTTPS
     #[arg(long)]
     pub no_redirect: bool,
+
+    /// Print a shell completion script (bash, zsh, fish, elvish, powershell)
+    #[arg(long, value_name = "SHELL", hide = true)]
+    pub completions: Option<clap_complete::Shell>,
+}
+
+impl Cli {
+    /// Writes the completion script for `shell` to stdout.
+    pub fn print_completions(shell: clap_complete::Shell) {
+        let mut cmd = <Cli as clap::CommandFactory>::command();
+        clap_complete::generate(shell, &mut cmd, "ferry", &mut std::io::stdout());
+    }
 }
 
 /// The positional arguments, sorted into what they mean.
