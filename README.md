@@ -369,7 +369,29 @@ cargo build
 cargo test            # unit tests plus end-to-end tests that run the binary
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
+cargo deny check      # security advisories, banned crates, licenses (deny.toml)
 ```
+
+A pre-commit hook runs all of these. Enable it once per clone:
+
+```sh
+cargo install --locked cargo-deny
+git config core.hooksPath .githooks
+```
+
+### Updating dependencies
+
+```sh
+cargo update                    # every crate, within the versions Cargo.toml allows
+cargo update -p rustls          # just one crate
+cargo test && cargo deny check
+```
+
+Commit the updated `Cargo.lock`. When `cargo deny check advisories` reports a
+vulnerable crate, it names the fixed version. If `cargo update -p <crate>`
+doesn't reach that version, raise the requirement in `Cargo.toml`, or for a
+transitive dependency, update whichever crate pulls it in (`cargo tree -i
+<crate>` shows which).
 
 The guiding principle: **do as much as possible by default.** Running ferry
 with no configuration should cover 99% of uses. Prefer a working default to a
