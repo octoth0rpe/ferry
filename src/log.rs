@@ -10,11 +10,10 @@ use std::io::{self, Write};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::task::{Context, Poll, ready};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use arc_swap::ArcSwap;
 use bytes::Bytes;
 use http::header::{HOST, REFERER, USER_AGENT};
 use http::{HeaderValue, Request, Response, Version};
@@ -316,9 +315,13 @@ impl Drop for LoggedBody {
 }
 
 /// The error log's current destination, swappable at runtime.
-fn error_sink() -> &'static ArcSwap<Sink> {
-    static SINK: OnceLock<ArcSwap<Sink>> = OnceLock::new();
-    SINK.get_or_init(|| ArcSwap::from_pointee(Sink::Stderr))
+fn error_sink() -> Arc<Sink> {
+    error_sink_slot().read().unwrap().clone()
+}
+
+fn error_sink_slot() -> &'static RwLock<Arc<Sink>> {
+    static SINK: OnceLock<RwLock<Arc<Sink>>> = OnceLock::new();
+    SINK.get_or_init(|| RwLock::new(Arc::new(Sink::Stderr)))
 }
 
 /// Points the error log at the configured destination.
@@ -327,18 +330,18 @@ pub fn set_error_log(target: &ErrorLog) -> io::Result<()> {
         ErrorLog::Stderr => Sink::Stderr,
         ErrorLog::File(path) => Sink::open(path)?,
     };
-    error_sink().store(Arc::new(sink));
+    *error_sink_slot().write().unwrap() = Arc::new(sink);
     Ok(())
 }
 
 pub fn reopen_error_log() -> io::Result<()> {
-    error_sink().load().reopen()
+    error_sink().reopen()
 }
 
 /// Installs the `tracing` subscriber that writes to the error log.
 /// `FERRY_LOG` (e.g. `debug`) sets the level.
 pub fn init_error_log() {
-    let ansi = error_sink().load().is_terminal() && std::env::var_os("NO_COLOR").is_none();
+    let ansi = error_sink().is_terminal() && std::env::var_os("NO_COLOR").is_none();
     let value = std::env::var("FERRY_LOG").ok();
     let (level, bad) = log_level(value.as_deref());
     tracing_subscriber::fmt()
@@ -388,9 +391,7 @@ impl Write for ErrorWriter {
 impl Drop for ErrorWriter {
     fn drop(&mut self) {
         if !self.0.is_empty() {
-            error_sink()
-                .load()
-                .write_line(&String::from_utf8_lossy(&self.0));
+            error_sink().write_line(&String::from_utf8_lossy(&self.0));
         }
     }
 }

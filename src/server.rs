@@ -1,7 +1,7 @@
 //! Listeners and connections: accepting, TLS, and serving HTTP.
 //!
-//! Each listener's settings live behind an [`ArcSwap`] so a config reload can
-//! replace them without dropping the socket. New connections pick up the new
+//! Each listener's settings live behind a `RwLock<Arc<_>>` so a config reload
+//! can replace them without dropping the socket. New connections pick up the new
 //! settings; existing ones finish with the old.
 
 use std::collections::HashMap;
@@ -10,11 +10,10 @@ use std::io;
 use std::net::{IpAddr, SocketAddr};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, RwLock};
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
-use arc_swap::ArcSwap;
 use http::header::{HOST, LOCATION};
 use http::{HeaderValue, Request, Response, StatusCode};
 use hyper::body::Incoming;
@@ -220,7 +219,7 @@ pub fn bind<'a>(
 }
 
 struct Running {
-    state: Arc<ArcSwap<ListenerState>>,
+    state: Arc<RwLock<Arc<ListenerState>>>,
     stop: CancellationToken,
 }
 
@@ -257,7 +256,7 @@ impl Server {
         for spec in specs {
             let state = Arc::new(spec.state);
             if let Some(running) = self.running.get(&spec.key) {
-                running.state.store(state);
+                *running.state.write().unwrap() = state;
                 continue;
             }
             let Some(socket) = sockets.remove(&spec.key) else {
@@ -269,7 +268,7 @@ impl Server {
             };
             let listener = TcpListener::from_std(socket)?;
             let running = Running {
-                state: Arc::new(ArcSwap::new(state)),
+                state: Arc::new(RwLock::new(state)),
                 stop: CancellationToken::new(),
             };
             tokio::spawn(accept_loop(
@@ -305,7 +304,7 @@ impl Server {
 
 async fn accept_loop(
     listener: TcpListener,
-    state: Arc<ArcSwap<ListenerState>>,
+    state: Arc<RwLock<Arc<ListenerState>>>,
     stop: CancellationToken,
     shutdown: CancellationToken,
     tracker: TaskTracker,
@@ -324,7 +323,7 @@ async fn accept_loop(
                 }
             },
         };
-        let state = state.load_full();
+        let state = state.read().unwrap().clone();
         tracker.spawn(handle_connection(
             stream,
             net::canonical(peer),

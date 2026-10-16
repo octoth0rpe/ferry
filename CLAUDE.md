@@ -31,8 +31,8 @@ All four must pass before every commit.
   are shared with the config file).
 - `config.rs`: `Config` (resolved), TOML loading with file:line errors,
   CLI-over-file merging, `--print-config` output.
-- `server.rs`: listeners keyed by (bind, port); state behind `ArcSwap` so
-  reloads swap it in place; TLS-vs-plain detection by peeking the first byte;
+- `server.rs`: listeners keyed by (bind, port); state behind `RwLock<Arc<_>>`
+  so reloads swap it in place; TLS-vs-plain detection by peeking the first byte;
   idle and shutdown handling.
 - `proxy.rs`: request forwarding, headers, upgrades, error pages, body limit.
 - `upstream.rs`: hyper-util pooled clients for TCP and Unix sockets.
