@@ -483,11 +483,6 @@ mod tests {
         assert_eq!(resp.status(), 502);
         assert_eq!(resp.headers()[CONTENT_TYPE], "text/html; charset=utf-8");
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
 
     #[test]
     fn random_ids_are_alphanumeric_and_distinct() {
