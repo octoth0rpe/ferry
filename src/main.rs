@@ -5,6 +5,7 @@ mod banner;
 mod check;
 mod cli;
 mod config;
+mod daemon;
 mod log;
 mod mapping;
 mod net;
@@ -20,6 +21,7 @@ use std::process::ExitCode;
 use clap::Parser;
 use tokio::signal::unix::{SignalKind, signal};
 
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::cli::Cli;
@@ -32,7 +34,10 @@ fn main() -> ExitCode {
         cli::Cli::print_completions(shell);
         return ExitCode::SUCCESS;
     }
-    let config = match Config::load(&cli) {
+    // Relative paths on the command line are resolved against this, even
+    // after daemonizing changes directory or on a later reload.
+    let cwd = std::env::current_dir().unwrap_or_else(|_| "/".into());
+    let config = match Config::load_in(&cli, &cwd) {
         Ok(c) => c,
         Err(errors) => {
             if cli.test {
@@ -78,15 +83,15 @@ fn main() -> ExitCode {
         Err(errors) => return fail(errors),
     };
 
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .expect("can start the tokio runtime");
-    runtime.block_on(run(cli, config, plan, sockets))
-}
-
-async fn run(cli: Cli, config: Config, plan: server::Plan, sockets: server::Sockets) -> ExitCode {
-    let mut server = Server::new();
+    let pid_path = cli
+        .pid_file
+        .as_ref()
+        .map(|p| config::absolute(&cwd.join(p)));
+    if let Some(path) = &pid_path
+        && let Err(e) = daemon::check_pid_file(path)
+    {
+        return fail(vec![e]);
+    }
     if let Some(ss) = &plan.self_signed
         && let Some(why) = &ss.generated
     {
@@ -96,6 +101,42 @@ async fn run(cli: Cli, config: Config, plan: server::Plan, sockets: server::Sock
         );
     }
     banner::show(&config, &plan);
+
+    let write_pid = || pid_path.as_deref().map(daemon::write_pid_file).transpose();
+    let _pid_file = if cli.daemonize {
+        if config.access_log == config::AccessLog::Stdout && !config.quiet {
+            eprintln!(
+                "warning: running in the background discards the access log; use --access-log FILE"
+            );
+        }
+        if config.error_log == config::ErrorLog::Stderr {
+            eprintln!(
+                "warning: running in the background discards the error log; use --error-log FILE"
+            );
+        }
+        daemon::daemonize(write_pid)
+    } else {
+        match write_pid() {
+            Ok(p) => p,
+            Err(e) => return fail(vec![e]),
+        }
+    };
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("can start the tokio runtime");
+    runtime.block_on(run(cli, cwd, config, plan, sockets))
+}
+
+async fn run(
+    cli: Cli,
+    cwd: PathBuf,
+    config: Config,
+    plan: server::Plan,
+    sockets: server::Sockets,
+) -> ExitCode {
+    let mut server = Server::new();
     let mut uses_self_signed = plan.self_signed.is_some();
     let mut access_log = plan.log.clone();
     if let Err(e) = server.apply(plan.listeners, sockets) {
@@ -143,7 +184,7 @@ async fn run(cli: Cli, config: Config, plan: server::Plan, sockets: server::Sock
             }
         };
 
-        match reload(&cli, &mut server) {
+        match reload(&cli, &cwd, &mut server) {
             Ok((new_config, plan)) => {
                 tracing::info!(
                     "reloaded configuration ({reason}): {} listener(s)",
@@ -181,8 +222,8 @@ struct Reloaded {
 
 /// Loads, checks and applies the configuration again. On any error the
 /// running configuration is left untouched.
-fn reload(cli: &Cli, server: &mut Server) -> Result<(Config, Reloaded), Vec<String>> {
-    let config = Config::load(cli)?;
+fn reload(cli: &Cli, cwd: &Path, server: &mut Server) -> Result<(Config, Reloaded), Vec<String>> {
+    let config = Config::load_in(cli, cwd)?;
     let plan = server::build(&config)?;
     for w in &plan.warnings {
         tracing::warn!("{w}");

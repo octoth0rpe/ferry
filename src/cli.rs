@@ -72,6 +72,14 @@ pub struct Cli {
     #[arg(long)]
     pub no_redirect: bool,
 
+    /// Run in the background
+    #[arg(short, long)]
+    pub daemonize: bool,
+
+    /// Write the process id to this file (and remove it on exit)
+    #[arg(long, value_name = "FILE", value_hint = ValueHint::FilePath)]
+    pub pid_file: Option<PathBuf>,
+
     /// Print a shell completion script (bash, zsh, fish, elvish, powershell)
     #[arg(long, value_name = "SHELL", hide = true)]
     pub completions: Option<clap_complete::Shell>,

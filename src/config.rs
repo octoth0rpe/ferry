@@ -125,22 +125,29 @@ impl Config {
     /// Builds the effective configuration from the command line and, with
     /// `-c`, the config file. Returns every problem found, not just the first.
     pub fn load(cli: &Cli) -> Result<Config, Vec<String>> {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
+        Config::load_in(cli, &cwd)
+    }
+
+    /// Like [`Config::load`], resolving relative command-line paths against
+    /// `cwd` rather than the current directory (which a daemon changes).
+    pub fn load_in(cli: &Cli, cwd: &Path) -> Result<Config, Vec<String>> {
         let positionals = cli.positionals().map_err(|e| vec![e])?;
         let mut config = match &cli.config {
-            Some(path) => load_file(path)?,
+            Some(path) => load_file(&cwd.join(path))?,
             None => Config::default(),
         };
         let mut errors = Vec::new();
 
         if let Some(ck) = positionals.cert_key {
             config.cert_key = Some(CertKey {
-                cert: absolute(&ck.cert),
-                key: absolute(&ck.key),
+                cert: absolute(&cwd.join(&ck.cert)),
+                key: absolute(&cwd.join(&ck.key)),
             });
         }
         for mut mapping in positionals.mappings {
             if let Upstream::Unix(path) = &mut mapping.upstream {
-                *path = absolute(path);
+                *path = absolute(&cwd.join(&path));
             }
             config.listeners.push(Listener {
                 mapping,
@@ -149,10 +156,10 @@ impl Config {
             });
         }
         if let Some(s) = &cli.access_log {
-            config.access_log = AccessLog::parse(s, Path::new("."));
+            config.access_log = AccessLog::parse(s, cwd);
         }
         if let Some(s) = &cli.error_log {
-            match ErrorLog::parse(s, Path::new(".")) {
+            match ErrorLog::parse(s, cwd) {
                 Ok(log) => config.error_log = log,
                 Err(e) => errors.push(e),
             }
@@ -681,6 +688,17 @@ mod tests {
             Upstream::Unix(p) => assert!(p.is_absolute() && p.ends_with("app.sock")),
             other => panic!("{other:?}"),
         }
+    }
+
+    #[test]
+    fn cli_paths_resolve_against_given_dir() {
+        let cli = Cli::try_parse_from(["ferry", "c.pem", "k.pem", "6005:./a.sock"]).unwrap();
+        let c = Config::load_in(&cli, Path::new("/srv/app")).unwrap();
+        assert_eq!(c.cert_key.unwrap().cert, PathBuf::from("/srv/app/c.pem"));
+        assert_eq!(
+            c.listeners[0].mapping.upstream,
+            Upstream::Unix("/srv/app/a.sock".into())
+        );
     }
 
     #[test]
