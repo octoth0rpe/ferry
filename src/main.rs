@@ -5,6 +5,7 @@ mod config;
 mod daemon;
 mod date;
 mod der;
+mod dirs;
 mod log;
 mod mapping;
 mod net;

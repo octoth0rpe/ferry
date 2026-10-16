@@ -6,6 +6,7 @@ use std::net::IpAddr;
 use std::path::Path;
 
 use crate::config::{Config, ErrorLog};
+use crate::dirs;
 use crate::mapping::Upstream;
 use crate::net;
 use crate::server::Plan;

@@ -17,7 +17,7 @@ use rustls::pki_types::pem::PemObject;
 
 use crate::config::CertKey;
 use crate::tls::{self, LoadedCert};
-use crate::{date, der, net};
+use crate::{date, der, dirs, net};
 
 /// Regenerate when the cert expires sooner than this.
 const RENEW_BEFORE_DAYS: i64 = 30;
