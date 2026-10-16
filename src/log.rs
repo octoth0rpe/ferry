@@ -120,7 +120,7 @@ impl AccessLogger {
 /// What's known about a request when it arrives.
 pub struct Pending {
     start: Instant,
-    time: jiff::Zoned,
+    time: jiff::Timestamp,
     peer: SocketAddr,
     method: String,
     path: String,
@@ -140,7 +140,7 @@ impl Pending {
         };
         Pending {
             start: Instant::now(),
-            time: jiff::Zoned::now(),
+            time: jiff::Timestamp::now(),
             peer,
             method: req.method().to_string(),
             path: req
@@ -206,7 +206,7 @@ impl Entry {
             0 => "-".to_string(),
             n => n.to_string(),
         };
-        let time = p.time.strftime("%d/%b/%Y:%H:%M:%S %z");
+        let time = timestamp(p.time);
         let request = format!("{} {} {proto}", p.method, p.path);
         match format {
             LogFormat::Common => format!(
@@ -223,7 +223,7 @@ impl Entry {
                 self.request_id,
             ),
             LogFormat::Json => serde_json::json!({
-                "time": p.time.timestamp().to_string(),
+                "time": time,
                 "remote_addr": ip.to_string(),
                 "method": p.method,
                 "path": p.path,
@@ -239,6 +239,21 @@ impl Entry {
             })
             .to_string(),
         }
+    }
+}
+
+/// Formats a time the way ferry writes every timestamp: ISO 8601, UTC,
+/// milliseconds. `2026-10-16T03:00:00.123Z`
+pub fn timestamp(t: jiff::Timestamp) -> String {
+    t.strftime("%Y-%m-%dT%H:%M:%S%.3fZ").to_string()
+}
+
+/// Timestamps for the error log, in the same format as the access log.
+struct IsoTime;
+
+impl tracing_subscriber::fmt::time::FormatTime for IsoTime {
+    fn format_time(&self, w: &mut tracing_subscriber::fmt::format::Writer<'_>) -> std::fmt::Result {
+        w.write_str(&timestamp(jiff::Timestamp::now()))
     }
 }
 
@@ -325,6 +340,7 @@ pub fn init_error_log() {
     tracing_subscriber::fmt()
         .with_writer(|| ErrorWriter(Vec::new()))
         .with_target(false)
+        .with_timer(IsoTime)
         .with_ansi(ansi)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_env("FERRY_LOG")
@@ -370,9 +386,7 @@ mod tests {
             .body(())
             .unwrap();
         let mut pending = Pending::new(&req, "10.0.0.1:5000".parse().unwrap());
-        pending.time = "2026-10-15T23:00:00-04:00[America/New_York]"
-            .parse()
-            .unwrap();
+        pending.time = "2026-10-16T03:00:00.042Z".parse().unwrap();
         Entry {
             pending,
             status: 200,
@@ -386,14 +400,14 @@ mod tests {
     fn common_format() {
         assert_eq!(
             entry().format(LogFormat::Common),
-            r#"10.0.0.1 - - [15/Oct/2026:23:00:00 -0400] "GET /a?b=c HTTP/1.1" 200 1234"#
+            r#"10.0.0.1 - - [2026-10-16T03:00:00.042Z] "GET /a?b=c HTTP/1.1" 200 1234"#
         );
     }
 
     #[test]
     fn combined_format() {
         let line = entry().format(LogFormat::Combined);
-        let prefix = r#"10.0.0.1 - - [15/Oct/2026:23:00:00 -0400] "GET /a?b=c HTTP/1.1" 200 1234 "-" "curl/8 \"x\"" "#;
+        let prefix = r#"10.0.0.1 - - [2026-10-16T03:00:00.042Z] "GET /a?b=c HTTP/1.1" 200 1234 "-" "curl/8 \"x\"" "#;
         assert!(line.starts_with(prefix), "{line}");
         assert!(line.ends_with("ms abc123"), "{line}");
     }
@@ -408,7 +422,13 @@ mod tests {
         assert_eq!(v["request_id"], "abc123");
         assert_eq!(v["upstream"], "http://localhost:6006");
         assert_eq!(v["referer"], serde_json::Value::Null);
-        assert_eq!(v["time"], "2026-10-16T03:00:00Z");
+        assert_eq!(v["time"], "2026-10-16T03:00:00.042Z");
+    }
+
+    #[test]
+    fn timestamps_are_iso8601_utc_with_milliseconds() {
+        let t: jiff::Timestamp = "2026-10-15T23:00:00.5-04:00".parse().unwrap();
+        assert_eq!(timestamp(t), "2026-10-16T03:00:00.500Z");
     }
 
     #[test]

@@ -119,12 +119,14 @@ means standard error (the default).
 .BI \-\-log\-format " format"
 Access log format:
 .B combined
-(the default; Apache combined format followed by the request duration and
-request ID),
+(the default; Apache's combined layout followed by the request duration
+and request ID),
 .B common
-(Apache common log format), or
+(Apache's common log layout), or
 .B json
-(one object per line).
+(one object per line). In every format, and in the error log, timestamps are
+ISO 8601 in UTC with milliseconds, for example
+.BR 2026\-10\-16T03:00:00.123Z .
 .TP
 .BR \-q ", " \-\-quiet
 Do not print the startup banner or write the access log to standard output.

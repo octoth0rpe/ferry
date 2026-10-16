@@ -18,6 +18,7 @@
 #   "combined" (default)  Apache combined, plus duration and request id at the end
 #   "common"              Apache common log format
 #   "json"                one JSON object per line, with every field
+# Timestamps are always ISO 8601 UTC, e.g. 2026-10-16T03:00:00.123Z.
 # log_format = "combined"
 
 # Reject request bodies larger than this. Default: unlimited.

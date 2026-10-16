@@ -219,15 +219,20 @@ has been fully sent, so byte counts and durations are accurate. It goes to
 stdout by default; `-q` turns that off, and `--access-log FILE` writes to a
 file instead.
 
-- `combined` (default): Apache combined format, plus duration and request ID:
-  `127.0.0.1 - - [15/Oct/2026:23:00:00 -0400] "GET / HTTP/2.0" 200 1234 "-" "curl/8.7" 3.1ms Xk3k9QpL2mN8vR4t`
-- `common`: Apache common log format.
+- `combined` (default): Apache's combined layout, plus duration and request ID:
+  `127.0.0.1 - - [2026-10-16T03:00:00.123Z] "GET / HTTP/2.0" 200 1234 "-" "curl/8.7" 3.1ms Xk3k9QpL2mN8vR4t`
+- `common`: Apache's common log layout.
 - `json`: one object per line with every field (time, client, method, path,
   protocol, host, status, bytes, duration, request ID, upstream, referer,
   user agent).
 
 The **error log** (startup, warnings, upstream failures, reloads) goes to
 stderr, or to `--error-log FILE`. Set `FERRY_LOG=debug` for more detail.
+
+Every timestamp ferry writes, in both logs and all formats, is ISO 8601 in
+UTC with milliseconds: `2026-10-16T03:00:00.123Z`. (In `common` and
+`combined` this replaces Apache's `[16/Oct/2026:03:00:00 +0000]`, so tools
+that parse those formats need their date format set accordingly.)
 
 ## What ferry does to requests
 
