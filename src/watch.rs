@@ -1,24 +1,25 @@
 //! Watching the config file and certificates for changes.
 //!
-//! Directories are watched rather than files, because editors save by
-//! writing a new file and renaming it over the old one, and certificate
-//! tools (certbot, Kubernetes secrets) swap symlinks. After any event the
-//! watched files' metadata is compared with what it was, so only real
-//! changes trigger a reload.
+//! The files are polled: once a second each one's metadata is compared with
+//! what it was. Following symlinks and comparing inodes means saves that
+//! rename a new file into place (editors) and symlink swaps (certbot,
+//! Kubernetes secrets) are both noticed, and only real changes trigger a
+//! reload.
 
 use std::collections::{BTreeSet, HashMap};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use notify::{RecommendedWatcher, RecursiveMode, Watcher as _};
-use tokio::sync::mpsc;
+use tokio::time::{Interval, MissedTickBehavior};
 
 use crate::config::Config;
 
-/// Wait this long after an event before checking, so a burst of events
-/// from one save turns into one reload.
-const DEBOUNCE: Duration = Duration::from_millis(250);
+/// How often the files are checked.
+const POLL: Duration = Duration::from_secs(1);
+/// After noticing a change, wait this long and look again, so a cert and key
+/// written one after the other turn into one reload.
+const SETTLE: Duration = Duration::from_millis(250);
 
 /// Identifies a version of a file: device, inode, mtime and size, following
 /// symlinks. `None` if the file doesn't exist.
@@ -46,74 +47,63 @@ pub fn files(config: &Config) -> BTreeSet<PathBuf> {
 }
 
 pub struct FileWatcher {
-    watcher: RecommendedWatcher,
-    dirs: BTreeSet<PathBuf>,
     files: HashMap<PathBuf, Fingerprint>,
-    events: mpsc::Receiver<()>,
+    tick: Interval,
+    /// Changes seen but not yet returned. Kept here rather than in
+    /// `changed`, so they survive it being cancelled by `select!`.
+    pending: Vec<PathBuf>,
 }
 
 impl FileWatcher {
-    pub fn new() -> notify::Result<FileWatcher> {
-        let (tx, events) = mpsc::channel(1);
-        let watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-            if event.is_ok() {
-                // Full means a check is already pending; that's enough.
-                let _ = tx.try_send(());
-            }
-        })?;
-        Ok(FileWatcher {
-            watcher,
-            dirs: BTreeSet::new(),
+    pub fn new() -> FileWatcher {
+        FileWatcher::with_interval(POLL)
+    }
+
+    fn with_interval(period: Duration) -> FileWatcher {
+        let mut tick = tokio::time::interval(period);
+        tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        FileWatcher {
             files: HashMap::new(),
-            events,
-        })
+            tick,
+            pending: Vec::new(),
+        }
     }
 
     /// Replaces the set of watched files, remembering their current state.
     pub fn set_files(&mut self, files: BTreeSet<PathBuf>) {
-        let dirs: BTreeSet<PathBuf> = files
-            .iter()
-            .filter_map(|f| f.parent().map(Path::to_path_buf))
-            .collect();
-        for dir in self.dirs.difference(&dirs) {
-            let _ = self.watcher.unwatch(dir);
-        }
-        for dir in dirs.difference(&self.dirs) {
-            if let Err(e) = self.watcher.watch(dir, RecursiveMode::NonRecursive) {
-                tracing::warn!("can't watch {} for changes: {e}", dir.display());
-            }
-        }
-        self.dirs = dirs;
         self.files = files
             .into_iter()
             .map(|f| (f.clone(), fingerprint(&f)))
             .collect();
+        self.pending.clear();
     }
 
     /// Waits until a watched file has changed, and returns the changed files.
     pub async fn changed(&mut self) -> Vec<PathBuf> {
-        loop {
-            if self.events.recv().await.is_none() {
-                std::future::pending::<()>().await;
-            }
-            tokio::time::sleep(DEBOUNCE).await;
-            while self.events.try_recv().is_ok() {}
-
-            let changed: Vec<PathBuf> = self
-                .files
-                .iter_mut()
-                .filter_map(|(path, old)| {
-                    let new = fingerprint(path);
-                    (new != *old).then(|| {
-                        *old = new;
-                        path.clone()
-                    })
-                })
-                .collect();
-            if !changed.is_empty() {
-                return changed;
-            }
+        while self.pending.is_empty() {
+            self.tick.tick().await;
+            self.pending = self.refresh();
         }
+        tokio::time::sleep(SETTLE).await;
+        let mut changed = std::mem::take(&mut self.pending);
+        changed.extend(self.refresh());
+        changed.sort();
+        changed.dedup();
+        changed
+    }
+
+    /// Updates the stored fingerprints, returning the files that changed.
+    fn refresh(&mut self) -> Vec<PathBuf> {
+        self.files
+            .iter_mut()
+            .filter_map(|(path, old)| {
+                let new = fingerprint(path);
+                (new != *old).then(|| {
+                    *old = new;
+                    path.clone()
+                })
+            })
+            .collect()
     }
 }
 
@@ -129,9 +119,8 @@ mod tests {
         let file = dir.join("ferry.toml");
         std::fs::write(&file, "a").unwrap();
 
-        let mut w = FileWatcher::new().unwrap();
+        let mut w = FileWatcher::with_interval(Duration::from_millis(100));
         w.set_files([file.clone()].into());
-        tokio::time::sleep(Duration::from_millis(100)).await;
 
         std::fs::write(dir.join("unrelated"), "x").unwrap();
         let quiet = tokio::time::timeout(Duration::from_millis(800), w.changed()).await;
@@ -144,6 +133,24 @@ mod tests {
             .await
             .expect("change noticed");
         assert_eq!(changed, vec![file]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn change_survives_cancellation() {
+        let dir = std::env::temp_dir().join(format!("ferry-watch-{}", fastrand::u64(..)));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("cert.pem");
+        std::fs::write(&file, "a").unwrap();
+        let mut w = FileWatcher::with_interval(Duration::from_millis(100));
+        w.set_files([file.clone()].into());
+
+        std::fs::write(&file, "bb").unwrap();
+        // Cancelled while settling, after the change has been seen, the way
+        // a signal arriving in main's select! would cancel it.
+        let cancelled = tokio::time::timeout(SETTLE / 2, w.changed()).await;
+        assert!(cancelled.is_err());
+        assert_eq!(w.changed().await, vec![file]);
         let _ = std::fs::remove_dir_all(dir);
     }
 }

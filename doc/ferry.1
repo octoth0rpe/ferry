@@ -237,8 +237,9 @@ ferry serves the same certificate whatever name the client asks for.
 ferry watches the configuration file and every certificate and key file it
 uses (without
 .BR \-c ,
-the certificate files from the command line). Saves made by renaming a new
-file into place and symbolic link changes are both noticed. When one
+the certificate files from the command line), checking them once a second.
+Saves made by renaming a new file into place and symbolic link changes are
+both noticed. When one
 changes, or on
 .BR SIGHUP ,
 ferry loads and checks the configuration as

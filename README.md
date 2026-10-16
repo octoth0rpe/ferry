@@ -200,7 +200,7 @@ certificate or creates log files.
 ## Reloading
 
 With `-c`, ferry watches the config file and every certificate and key it
-uses. When one changes, ferry checks the new configuration the same way `-t`
+uses, checking them once a second. When one changes, ferry checks the new configuration the same way `-t`
 does:
 
 - **If it's valid**, ferry applies it in place. New listeners start, removed

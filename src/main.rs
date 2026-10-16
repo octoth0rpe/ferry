@@ -145,16 +145,8 @@ async fn run(
         return fail(vec![e.to_string()]);
     }
 
-    let mut watcher = match watch::FileWatcher::new() {
-        Ok(w) => Some(w),
-        Err(e) => {
-            tracing::warn!("can't watch files for changes ({e}); reload with SIGHUP instead");
-            None
-        }
-    };
-    if let Some(w) = &mut watcher {
-        w.set_files(watch::files(&config));
-    }
+    let mut watcher = watch::FileWatcher::new();
+    watcher.set_files(watch::files(&config));
 
     let mut config = config;
     // Long-running ferries renew their self-signed certificate in place.
@@ -170,7 +162,7 @@ async fn run(
                 reopen_logs(&access_log);
                 continue;
             }
-            changed = async { watcher.as_mut().unwrap().changed().await }, if watcher.is_some() => {
+            changed = watcher.changed() => {
                 let names: Vec<String> = changed.iter().map(|p| p.display().to_string()).collect();
                 format!("{} changed", names.join(", "))
             }
@@ -190,9 +182,7 @@ async fn run(
                 );
                 uses_self_signed = plan.uses_self_signed;
                 access_log = plan.log;
-                if let Some(w) = &mut watcher {
-                    w.set_files(watch::files(&new_config));
-                }
+                watcher.set_files(watch::files(&new_config));
                 config = new_config;
             }
             Err(errors) => {
