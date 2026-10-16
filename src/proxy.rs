@@ -20,6 +20,7 @@ use hyper::upgrade::OnUpgrade;
 use hyper_util::rt::TokioIo;
 
 use crate::config::format_duration;
+use crate::log::{AccessLogger, Pending};
 use crate::mapping::Upstream;
 use crate::upstream::{Body, BoxError, Client, base_uri};
 
@@ -82,13 +83,24 @@ impl Route {
 
 /// Forwards one request to the route's upstream and returns its response, or
 /// an error page explaining what went wrong.
-pub async fn handle(route: &Route, req: Request<Incoming>, peer: SocketAddr) -> Response<Body> {
+pub async fn handle(
+    route: &Route,
+    req: Request<Incoming>,
+    peer: SocketAddr,
+    logger: &Arc<AccessLogger>,
+) -> Response<Body> {
+    let pending = Pending::new(&req, peer);
     let html = wants_html(req.headers());
     let request_id = request_id(req.headers());
 
     let mut resp = forward(route, req, peer, &request_id, html).await;
-    resp.headers_mut().insert(X_REQUEST_ID, request_id);
-    resp
+    resp.headers_mut().insert(X_REQUEST_ID, request_id.clone());
+    pending.finish(
+        resp,
+        logger.clone(),
+        &request_id,
+        route.upstream.to_string(),
+    )
 }
 
 async fn forward(
@@ -164,7 +176,7 @@ async fn forward(
     let mut resp = match route.client.request(upstream_req).await {
         Ok(resp) => resp,
         Err(_) if exceeded.load(Ordering::Relaxed) => return too_large(html),
-        Err(e) => return upstream_error(route, &e, html),
+        Err(e) => return upstream_error(route, &e, request_id, html),
     };
 
     match (resp.status(), client_upgrade) {
@@ -263,6 +275,7 @@ fn too_large(html: bool) -> Response<Body> {
 fn upstream_error(
     route: &Route,
     err: &hyper_util::client::legacy::Error,
+    request_id: &HeaderValue,
     html: bool,
 ) -> Response<Body> {
     let target = route.target();
@@ -294,7 +307,11 @@ fn upstream_error(
             ),
         )
     };
-    tracing::warn!("{}", message.trim_start_matches("ferry: "));
+    tracing::warn!(
+        "{} (request {})",
+        message.trim_start_matches("ferry: "),
+        request_id.to_str().unwrap_or("-")
+    );
     error_page(status, &message, html)
 }
 

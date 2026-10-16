@@ -27,7 +27,8 @@ use tokio_rustls::TlsAcceptor;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use crate::config::Config;
+use crate::config::{AccessLog, Config};
+use crate::log::{AccessLogger, Pending};
 use crate::proxy::{self, Route, error_page};
 use crate::upstream::Body;
 use crate::{net, selfsigned, tls};
@@ -38,6 +39,7 @@ pub type ListenKey = (Option<IpAddr>, u16);
 /// How a listener behaves. Swapped atomically on reload.
 pub struct ListenerState {
     tls: TlsAcceptor,
+    log: Arc<AccessLogger>,
     route: Arc<Route>,
     redirect: bool,
     handshake_timeout: Duration,
@@ -68,6 +70,16 @@ pub fn build(config: &Config) -> Result<Plan, Vec<String>> {
         HashMap::new();
     let mut self_signed = None;
     let mut listeners = Vec::new();
+    let log = match AccessLogger::from_config(config) {
+        Ok(log) => Arc::new(log),
+        Err(e) => {
+            let AccessLog::File(path) = &config.access_log else {
+                unreachable!("only files can fail to open")
+            };
+            errors.push(format!("can't open access log {}: {e}", path.display()));
+            Arc::new(AccessLogger::off())
+        }
+    };
 
     for l in &config.listeners {
         let ck = l.cert_key(config).cloned();
@@ -113,6 +125,7 @@ pub fn build(config: &Config) -> Result<Plan, Vec<String>> {
             listen: l.mapping.listen_display(),
             state: ListenerState {
                 tls: TlsAcceptor::from(server_config),
+                log: log.clone(),
                 route: Arc::new(route),
                 redirect: config.redirect,
                 handshake_timeout: adv.handshake_timeout,
@@ -288,7 +301,7 @@ async fn handle_connection(
     }
 
     if first[0] != TLS_HANDSHAKE {
-        serve_plain(stream, state.redirect, state.handshake_timeout).await;
+        serve_plain(stream, peer, &state).await;
         return;
     }
 
@@ -310,9 +323,11 @@ async fn handle_connection(
         last: activity.clone(),
     });
     let route = state.route.clone();
+    let log = state.log.clone();
     let service = service_fn(move |req: Request<Incoming>| {
         let route = route.clone();
-        async move { Ok::<_, Infallible>(proxy::handle(&route, req, peer).await) }
+        let log = log.clone();
+        async move { Ok::<_, Infallible>(proxy::handle(&route, req, peer, &log).await) }
     });
 
     let mut builder = auto::Builder::new(TokioExecutor::new());
@@ -357,13 +372,21 @@ async fn handle_connection(
 
 /// Answers plain HTTP sent to a TLS port, by redirecting to HTTPS or with a
 /// short explanation.
-async fn serve_plain(stream: TcpStream, redirect: bool, timeout: Duration) {
-    let service = service_fn(move |req: Request<Incoming>| async move {
-        Ok::<_, Infallible>(redirect_response(&req, redirect, false))
+async fn serve_plain(stream: TcpStream, peer: SocketAddr, state: &ListenerState) {
+    let redirect = state.redirect;
+    let log = state.log.clone();
+    let service = service_fn(move |req: Request<Incoming>| {
+        let log = log.clone();
+        async move {
+            let pending = Pending::new(&req, peer);
+            let resp = redirect_response(&req, redirect, false);
+            let id = HeaderValue::from_static("-");
+            Ok::<_, Infallible>(pending.finish(resp, log, &id, "redirect".into()))
+        }
     });
     let _ = hyper::server::conn::http1::Builder::new()
         .timer(TokioTimer::new())
-        .header_read_timeout(timeout)
+        .header_read_timeout(state.handshake_timeout)
         .keep_alive(false)
         .serve_connection(TokioIo::new(stream), service)
         .await;

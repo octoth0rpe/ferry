@@ -22,19 +22,20 @@ use crate::server::Server;
 
 fn main() -> ExitCode {
     let cli = cli::Cli::parse();
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .with_target(false)
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_env("FERRY_LOG")
-                .unwrap_or_else(|_| "info".into()),
-        )
-        .init();
-
     let config = match Config::load(&cli) {
         Ok(c) => c,
         Err(errors) => return fail(errors),
     };
+    if let Err(e) = log::set_error_log(&config.error_log) {
+        let config::ErrorLog::File(path) = &config.error_log else {
+            unreachable!("only files can fail to open")
+        };
+        return fail(vec![format!(
+            "can't open error log {}: {e}",
+            path.display()
+        )]);
+    }
+    log::init_error_log();
     let plan = match server::build(&config) {
         Ok(plan) => plan,
         Err(errors) => return fail(errors),
