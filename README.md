@@ -14,13 +14,10 @@ ferry 0.1.0
   cert: self-signed (~/Library/Application Support/ferry/self-signed.pem)
 ```
 
-**A dev tool you don't outgrow.** ferry is for the moments when setting up
-nginx or Caddy is more than the job needs: a local dev server that wants
-HTTPS, a WebSocket app on your LAN, a quick demo. It's also built to keep
-running when that project goes to production: it reloads its config and
-certificates live, runs in the background, and writes proper logs. When you
-do want nginx or Caddy, ferry will hand you an equivalent config for them
-(planned for v0.3).
+**HTTPS for development, with a path to production.** ferry gives your dev
+server HTTPS in one command: no nginx or Caddy setup, no certificates to make.
+When the project is ready to ship, ferry will write you an equivalent nginx or
+Caddy config (coming in v0.3), so what worked in development carries over.
 
 ferry runs on macOS and Linux. It's a single binary with no runtime
 dependencies.
