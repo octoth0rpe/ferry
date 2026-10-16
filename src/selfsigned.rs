@@ -176,7 +176,7 @@ mod tests {
 
     #[test]
     fn generates_then_reuses() {
-        let dir = std::env::temp_dir().join(format!("ferry-ss-{}", fastrand::u64(..)));
+        let dir = std::env::temp_dir().join(format!("ferry-ss-{}", crate::proxy::random_id(12)));
         let paths = CertKey {
             cert: dir.join("c.pem"),
             key: dir.join("k.pem"),

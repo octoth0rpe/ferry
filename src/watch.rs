@@ -113,7 +113,7 @@ mod tests {
 
     #[tokio::test]
     async fn notices_rename_over_and_ignores_unrelated_files() {
-        let dir = std::env::temp_dir().join(format!("ferry-watch-{}", fastrand::u64(..)));
+        let dir = std::env::temp_dir().join(format!("ferry-watch-{}", crate::proxy::random_id(12)));
         std::fs::create_dir_all(&dir).unwrap();
         let dir = dir.canonicalize().unwrap();
         let file = dir.join("ferry.toml");
@@ -138,7 +138,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn change_survives_cancellation() {
-        let dir = std::env::temp_dir().join(format!("ferry-watch-{}", fastrand::u64(..)));
+        let dir = std::env::temp_dir().join(format!("ferry-watch-{}", crate::proxy::random_id(12)));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("cert.pem");
         std::fs::write(&file, "a").unwrap();

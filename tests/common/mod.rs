@@ -8,7 +8,8 @@ use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
 use http::{Request, Response, StatusCode};
@@ -27,7 +28,16 @@ pub struct TempDir(pub PathBuf);
 
 impl TempDir {
     pub fn new() -> TempDir {
-        let dir = std::env::temp_dir().join(format!("ferry-it-{}", fastrand::u64(..)));
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .subsec_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "ferry-it-{}-{}-{nanos}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         TempDir(dir)
     }

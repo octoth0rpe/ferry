@@ -647,7 +647,7 @@ mod tests {
             let dir = std::env::temp_dir().join(format!(
                 "ferry-test-{}-{}",
                 std::process::id(),
-                fastrand::u64(..)
+                crate::proxy::random_id(12)
             ));
             std::fs::create_dir_all(&dir).unwrap();
             TempDir(dir)

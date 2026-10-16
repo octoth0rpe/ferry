@@ -139,7 +139,7 @@ pub mod tests {
     }
 
     fn tempdir() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("ferry-tls-{}", fastrand::u64(..)));
+        let dir = std::env::temp_dir().join(format!("ferry-tls-{}", crate::proxy::random_id(12)));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }

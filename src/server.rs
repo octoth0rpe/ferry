@@ -581,7 +581,7 @@ mod tests {
     use clap::Parser;
 
     fn config(args: &[&str]) -> (std::path::PathBuf, Config) {
-        let dir = std::env::temp_dir().join(format!("ferry-srv-{}", fastrand::u64(..)));
+        let dir = std::env::temp_dir().join(format!("ferry-srv-{}", crate::proxy::random_id(12)));
         std::fs::create_dir_all(&dir).unwrap();
         let ck = crate::tls::tests::write_test_cert(&dir, "t");
         let mut argv = vec![

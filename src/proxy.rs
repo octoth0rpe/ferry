@@ -8,6 +8,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll, ready};
 use std::time::Duration;
 
+use ring::rand::{SecureRandom, SystemRandom};
+
 use bytes::Bytes;
 use http::header::{
     ACCEPT, CONNECTION, CONTENT_LENGTH, CONTENT_TYPE, HOST, HeaderName, HeaderValue,
@@ -209,11 +211,30 @@ fn request_id(headers: &HeaderMap) -> HeaderValue {
         .filter(|v| !v.is_empty() && v.len() <= 128)
         .cloned()
         .unwrap_or_else(|| {
-            let id: String = std::iter::repeat_with(fastrand::alphanumeric)
-                .take(16)
-                .collect();
-            HeaderValue::from_str(&id).expect("alphanumeric is a valid header value")
+            HeaderValue::from_str(&random_id(16)).expect("alphanumeric is a valid header value")
         })
+}
+
+/// `len` random letters and digits from the OS random source, so request IDs
+/// can't be guessed.
+pub fn random_id(len: usize) -> String {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    // The largest multiple of 62 that fits in a byte. Bytes at or above it
+    // are skipped, so every character is equally likely.
+    const LIMIT: u8 = (256 / ALPHABET.len() * ALPHABET.len()) as u8;
+    let rng = SystemRandom::new();
+    let mut id = String::with_capacity(len);
+    let mut buf = [0u8; 32];
+    while id.len() < len {
+        rng.fill(&mut buf).expect("the OS random source works");
+        id.extend(
+            buf.iter()
+                .filter(|&&b| b < LIMIT)
+                .map(|&b| char::from(ALPHABET[usize::from(b) % ALPHABET.len()]))
+                .take(len - id.len()),
+        );
+    }
+    id
 }
 
 fn strip_hop_by_hop(headers: &mut HeaderMap) {
@@ -461,5 +482,22 @@ mod tests {
         let resp = error_page(StatusCode::BAD_GATEWAY, "<b>", true);
         assert_eq!(resp.status(), 502);
         assert_eq!(resp.headers()[CONTENT_TYPE], "text/html; charset=utf-8");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn random_ids_are_alphanumeric_and_distinct() {
+        let ids: std::collections::HashSet<String> = (0..1000).map(|_| random_id(16)).collect();
+        assert_eq!(ids.len(), 1000);
+        assert!(
+            ids.iter()
+                .all(|id| id.len() == 16 && id.bytes().all(|b| b.is_ascii_alphanumeric()))
+        );
+        assert_eq!(random_id(100).len(), 100);
+        assert_eq!(random_id(0), "");
     }
 }

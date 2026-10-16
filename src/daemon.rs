@@ -130,7 +130,7 @@ mod tests {
 
     #[test]
     fn pid_file_lifecycle() {
-        let dir = std::env::temp_dir().join(format!("ferry-pid-{}", fastrand::u64(..)));
+        let dir = std::env::temp_dir().join(format!("ferry-pid-{}", crate::proxy::random_id(12)));
         let path = dir.join("run/ferry.pid");
 
         check_pid_file(&path).unwrap();
