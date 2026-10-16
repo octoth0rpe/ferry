@@ -124,6 +124,7 @@ impl Listener {
 impl Config {
     /// Builds the effective configuration from the command line and, with
     /// `-c`, the config file. Returns every problem found, not just the first.
+    #[cfg(test)]
     pub fn load(cli: &Cli) -> Result<Config, Vec<String>> {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
         Config::load_in(cli, &cwd)

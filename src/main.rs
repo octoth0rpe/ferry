@@ -1,6 +1,3 @@
-// Allowed while v0.1 is being built out; remove once everything is wired up.
-#![allow(dead_code)]
-
 mod banner;
 mod check;
 mod cli;
@@ -136,6 +133,12 @@ async fn run(
     plan: server::Plan,
     sockets: server::Sockets,
 ) -> ExitCode {
+    // Handle signals before serving, so none arrive unhandled.
+    let mut sigterm = signal(SignalKind::terminate()).expect("can install SIGTERM handler");
+    let mut sigint = signal(SignalKind::interrupt()).expect("can install SIGINT handler");
+    let mut sighup = signal(SignalKind::hangup()).expect("can install SIGHUP handler");
+    let mut sigusr1 = signal(SignalKind::user_defined1()).expect("can install SIGUSR1 handler");
+
     let mut server = Server::new();
     let mut uses_self_signed = plan.self_signed.is_some();
     let mut access_log = plan.log.clone();
@@ -155,10 +158,6 @@ async fn run(
     }
 
     let mut config = config;
-    let mut sigterm = signal(SignalKind::terminate()).expect("can install SIGTERM handler");
-    let mut sigint = signal(SignalKind::interrupt()).expect("can install SIGINT handler");
-    let mut sighup = signal(SignalKind::hangup()).expect("can install SIGHUP handler");
-    let mut sigusr1 = signal(SignalKind::user_defined1()).expect("can install SIGUSR1 handler");
     // Long-running ferries renew their self-signed certificate in place.
     let mut renewal_check = tokio::time::interval(Duration::from_secs(12 * 3600));
     renewal_check.tick().await;

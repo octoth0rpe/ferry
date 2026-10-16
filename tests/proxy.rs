@@ -284,6 +284,8 @@ async fn sigterm_shuts_down_cleanly() {
     let up = tcp_upstream("127.0.0.1:0").await;
     let port = free_port();
     let mut ferry = Ferry::start(&[&format!("{port}:{up}")], port);
+    // Once a request is served, ferry is fully up.
+    client(false).get(url(port, "/")).send().await.unwrap();
     ferry.signal("TERM");
     assert_eq!(
         ferry.wait(Duration::from_secs(5)),
