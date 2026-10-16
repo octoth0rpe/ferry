@@ -15,7 +15,7 @@ use crate::cli::Cli;
 use crate::mapping::{self, Mapping, Upstream};
 
 /// A certificate chain and its private key, both PEM files.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CertKey {
     pub cert: PathBuf,
     pub key: PathBuf,
@@ -474,11 +474,11 @@ pub fn parse_duration(s: &str) -> Result<Duration, String> {
 /// Formats a duration the way [`parse_duration`] reads it.
 pub fn format_duration(d: Duration) -> String {
     let ms = d.as_millis();
-    if ms % 1000 != 0 {
+    if !ms.is_multiple_of(1000) {
         format!("{ms}ms")
-    } else if ms % 3_600_000 == 0 && ms > 0 {
+    } else if ms.is_multiple_of(3_600_000) && ms > 0 {
         format!("{}h", ms / 3_600_000)
-    } else if ms % 60_000 == 0 && ms > 0 {
+    } else if ms.is_multiple_of(60_000) && ms > 0 {
         format!("{}m", ms / 60_000)
     } else {
         format!("{}s", ms / 1000)
@@ -488,7 +488,7 @@ pub fn format_duration(d: Duration) -> String {
 /// Formats a byte size the way [`parse_size`] reads it.
 pub fn format_size(n: u64) -> String {
     for (suffix, mult) in [("G", 1u64 << 30), ("M", 1 << 20), ("K", 1 << 10)] {
-        if n % mult == 0 {
+        if n.is_multiple_of(mult) {
             return format!("{}{suffix}", n / mult);
         }
     }

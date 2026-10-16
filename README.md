@@ -17,7 +17,7 @@ keep rarely-changed knobs in the config file rather than on the command line.
 
 ## Building
 
-Requires Rust 1.85 or newer.
+Requires Rust 1.88 or newer.
 
 ```sh
 cargo build --release      # binary at target/release/ferry
