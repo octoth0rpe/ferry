@@ -46,11 +46,16 @@ impl Mapping {
 
     /// The listen side as written by a user, e.g. `6005` or `127.0.0.1:6005`.
     pub fn listen_display(&self) -> String {
-        match self.bind {
-            None => self.port.to_string(),
-            Some(IpAddr::V4(ip)) => format!("{ip}:{}", self.port),
-            Some(IpAddr::V6(ip)) => format!("[{ip}]:{}", self.port),
-        }
+        listen_display(self.bind, self.port)
+    }
+}
+
+/// A listen address as written by a user, e.g. `6005` or `127.0.0.1:6005`.
+pub fn listen_display(bind: Option<IpAddr>, port: u16) -> String {
+    match bind {
+        None => port.to_string(),
+        Some(IpAddr::V4(ip)) => format!("{ip}:{port}"),
+        Some(IpAddr::V6(ip)) => format!("[{ip}]:{port}"),
     }
 }
 

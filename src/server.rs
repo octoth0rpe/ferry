@@ -38,12 +38,17 @@ pub type ListenKey = (Option<IpAddr>, u16);
 
 /// How a listener behaves. Swapped atomically on reload.
 pub struct ListenerState {
-    tls: TlsAcceptor,
+    /// `None` for the plain-HTTP port 80 listener that only redirects.
+    https: Option<Https>,
     log: Arc<AccessLogger>,
-    route: Arc<Route>,
     redirect: bool,
     handshake_timeout: Duration,
     idle_timeout: Duration,
+}
+
+struct Https {
+    tls: TlsAcceptor,
+    route: Arc<Route>,
 }
 
 /// A listener ready to start: its key, how it's described to people, and its
@@ -52,6 +57,8 @@ pub struct ListenerSpec {
     pub key: ListenKey,
     pub listen: String,
     pub state: ListenerState,
+    /// If it can't be bound, warn and carry on without it.
+    pub optional: bool,
 }
 
 /// Everything [`build`] prepared, plus things worth telling the user.
@@ -124,14 +131,43 @@ pub fn build(config: &Config) -> Result<Plan, Vec<String>> {
             key: (l.mapping.bind, l.mapping.port),
             listen: l.mapping.listen_display(),
             state: ListenerState {
-                tls: TlsAcceptor::from(server_config),
+                https: Some(Https {
+                    tls: TlsAcceptor::from(server_config),
+                    route: Arc::new(route),
+                }),
                 log: log.clone(),
-                route: Arc::new(route),
                 redirect: config.redirect,
                 handshake_timeout: adv.handshake_timeout,
                 idle_timeout: adv.idle_timeout,
             },
+            optional: false,
         });
+    }
+
+    // Port 80 redirects to 443, if 443 is served and 80 isn't otherwise used.
+    let uses = |port| {
+        config
+            .listeners
+            .iter()
+            .filter(move |l| l.mapping.port == port)
+    };
+    if config.redirect && uses(80).next().is_none() {
+        let mut binds: Vec<Option<IpAddr>> = uses(443).map(|l| l.mapping.bind).collect();
+        binds.dedup();
+        for bind in binds {
+            listeners.push(ListenerSpec {
+                key: (bind, 80),
+                listen: crate::mapping::listen_display(bind, 80),
+                state: ListenerState {
+                    https: None,
+                    log: log.clone(),
+                    redirect: true,
+                    handshake_timeout: config.advanced.handshake_timeout,
+                    idle_timeout: config.advanced.idle_timeout,
+                },
+                optional: true,
+            });
+        }
     }
 
     if errors.is_empty() {
@@ -146,14 +182,18 @@ pub fn build(config: &Config) -> Result<Plan, Vec<String>> {
     }
 }
 
+pub type Sockets = HashMap<ListenKey, std::net::TcpListener>;
+
 /// Binds sockets for every listener in `specs` whose key isn't in `skip`.
-/// Binds all or none.
+/// Fails if any required listener can't be bound; optional ones that can't
+/// are returned as warnings.
 pub fn bind<'a>(
     specs: impl IntoIterator<Item = &'a ListenerSpec>,
     skip: impl Fn(&ListenKey) -> bool,
-) -> Result<HashMap<ListenKey, std::net::TcpListener>, Vec<String>> {
+) -> Result<(Sockets, Vec<String>), Vec<String>> {
     let mut sockets = HashMap::new();
     let mut errors = Vec::new();
+    let mut warnings = Vec::new();
     for spec in specs {
         if skip(&spec.key) {
             continue;
@@ -162,11 +202,15 @@ pub fn bind<'a>(
             Ok(s) => {
                 sockets.insert(spec.key, s);
             }
+            Err(e) if spec.optional => warnings.push(format!(
+                "not redirecting port 80 to 443: {}",
+                net::bind_error(&spec.listen, spec.key.1, &e)
+            )),
             Err(e) => errors.push(net::bind_error(&spec.listen, spec.key.1, &e)),
         }
     }
     if errors.is_empty() {
-        Ok(sockets)
+        Ok((sockets, warnings))
     } else {
         Err(errors)
     }
@@ -213,9 +257,13 @@ impl Server {
                 running.state.store(state);
                 continue;
             }
-            let socket = sockets
-                .remove(&spec.key)
-                .expect("a socket is bound for every new listener");
+            let Some(socket) = sockets.remove(&spec.key) else {
+                assert!(
+                    spec.optional,
+                    "a socket is bound for every required listener"
+                );
+                continue;
+            };
             let listener = TcpListener::from_std(socket)?;
             let running = Running {
                 state: Arc::new(ArcSwap::new(state)),
@@ -300,12 +348,16 @@ async fn handle_connection(
         _ => return,
     }
 
+    let Some(https) = &state.https else {
+        serve_plain(stream, peer, &state, true).await;
+        return;
+    };
     if first[0] != TLS_HANDSHAKE {
-        serve_plain(stream, peer, &state).await;
+        serve_plain(stream, peer, &state, false).await;
         return;
     }
 
-    let tls = match tokio::time::timeout(state.handshake_timeout, state.tls.accept(stream)).await {
+    let tls = match tokio::time::timeout(state.handshake_timeout, https.tls.accept(stream)).await {
         Ok(Ok(tls)) => tls,
         Ok(Err(e)) => {
             tracing::debug!("TLS handshake with {peer} failed: {e}");
@@ -322,7 +374,7 @@ async fn handle_connection(
         inner: tls,
         last: activity.clone(),
     });
-    let route = state.route.clone();
+    let route = https.route.clone();
     let log = state.log.clone();
     let service = service_fn(move |req: Request<Incoming>| {
         let route = route.clone();
@@ -372,14 +424,21 @@ async fn handle_connection(
 
 /// Answers plain HTTP sent to a TLS port, by redirecting to HTTPS or with a
 /// short explanation.
-async fn serve_plain(stream: TcpStream, peer: SocketAddr, state: &ListenerState) {
+/// `default_port` is for the port 80 listener: redirect to the default
+/// HTTPS port rather than the same one.
+async fn serve_plain(
+    stream: TcpStream,
+    peer: SocketAddr,
+    state: &ListenerState,
+    default_port: bool,
+) {
     let redirect = state.redirect;
     let log = state.log.clone();
     let service = service_fn(move |req: Request<Incoming>| {
         let log = log.clone();
         async move {
             let pending = Pending::new(&req, peer);
-            let resp = redirect_response(&req, redirect, false);
+            let resp = redirect_response(&req, redirect, default_port);
             let id = HeaderValue::from_static("-");
             Ok::<_, Infallible>(pending.finish(resp, log, &id, "redirect".into()))
         }
@@ -394,11 +453,7 @@ async fn serve_plain(stream: TcpStream, peer: SocketAddr, state: &ListenerState)
 
 /// Redirects a plain HTTP request to the same URL over HTTPS. With
 /// `default_port`, the redirect drops the port (for `:80` → `:443`).
-pub fn redirect_response(
-    req: &Request<Incoming>,
-    enabled: bool,
-    default_port: bool,
-) -> Response<Body> {
+pub fn redirect_response<B>(req: &Request<B>, enabled: bool, default_port: bool) -> Response<Body> {
     let host = req
         .headers()
         .get(HOST)
@@ -521,6 +576,80 @@ impl<T: AsyncWrite + Unpin> AsyncWrite for Tracked<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
+
+    fn config(args: &[&str]) -> (std::path::PathBuf, Config) {
+        let dir = std::env::temp_dir().join(format!("ferry-srv-{}", fastrand::u64(..)));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ck = crate::tls::tests::write_test_cert(&dir, "t");
+        let mut argv = vec![
+            "ferry".to_string(),
+            ck.cert.display().to_string(),
+            ck.key.display().to_string(),
+        ];
+        argv.extend(args.iter().map(|s| s.to_string()));
+        let cli = crate::cli::Cli::try_parse_from(argv).unwrap();
+        (dir, Config::load(&cli).unwrap())
+    }
+
+    fn keys(args: &[&str]) -> Vec<(ListenKey, bool)> {
+        let (dir, config) = config(args);
+        let plan = build(&config).unwrap();
+        let _ = std::fs::remove_dir_all(dir);
+        plan.listeners.iter().map(|l| (l.key, l.optional)).collect()
+    }
+
+    #[test]
+    fn port_80_redirects_when_443_is_served() {
+        assert_eq!(
+            keys(&["443:3000"]),
+            vec![((None, 443), false), ((None, 80), true)]
+        );
+        let lo = Some("127.0.0.1".parse().unwrap());
+        assert_eq!(
+            keys(&["127.0.0.1:443:3000"]),
+            vec![((lo, 443), false), ((lo, 80), true)]
+        );
+        assert_eq!(keys(&["6005:3000"]), vec![((None, 6005), false)]);
+        assert_eq!(
+            keys(&["443:3000", "80:3001"]),
+            vec![((None, 443), false), ((None, 80), false)]
+        );
+        assert_eq!(
+            keys(&["--no-redirect", "443:3000"]),
+            vec![((None, 443), false)]
+        );
+    }
+
+    fn redirect(host: &str, path: &str, default_port: bool) -> (u16, Option<String>) {
+        let req = Request::builder()
+            .uri(path)
+            .header(HOST, host)
+            .body(())
+            .unwrap();
+        let resp = redirect_response(&req, true, default_port);
+        let location = resp
+            .headers()
+            .get(LOCATION)
+            .map(|l| l.to_str().unwrap().to_string());
+        (resp.status().as_u16(), location)
+    }
+
+    #[test]
+    fn redirect_locations() {
+        assert_eq!(
+            redirect("localhost:6005", "/a?b", false),
+            (308, Some("https://localhost:6005/a?b".into()))
+        );
+        assert_eq!(
+            redirect("example.com", "/", true),
+            (308, Some("https://example.com/".into()))
+        );
+        assert_eq!(
+            redirect("example.com:80", "/x", true),
+            (308, Some("https://example.com/x".into()))
+        );
+    }
 
     #[test]
     fn strips_ports() {

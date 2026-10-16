@@ -44,7 +44,12 @@ fn main() -> ExitCode {
         tracing::warn!("{w}");
     }
     let sockets = match server::bind(&plan.listeners, |_| false) {
-        Ok(s) => s,
+        Ok((sockets, warnings)) => {
+            for w in warnings {
+                tracing::warn!("{w}");
+            }
+            sockets
+        }
         Err(errors) => return fail(errors),
     };
 
@@ -55,11 +60,7 @@ fn main() -> ExitCode {
     runtime.block_on(run(config, plan, sockets))
 }
 
-async fn run(
-    config: Config,
-    plan: server::Plan,
-    sockets: std::collections::HashMap<server::ListenKey, std::net::TcpListener>,
-) -> ExitCode {
+async fn run(config: Config, plan: server::Plan, sockets: server::Sockets) -> ExitCode {
     let mut server = Server::new();
     if let Some(ss) = &plan.self_signed {
         match &ss.generated {
