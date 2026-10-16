@@ -1,6 +1,7 @@
 // Allowed while v0.1 is being built out; remove once everything is wired up.
 #![allow(dead_code)]
 
+mod banner;
 mod cli;
 mod config;
 mod log;
@@ -62,23 +63,15 @@ fn main() -> ExitCode {
 
 async fn run(config: Config, plan: server::Plan, sockets: server::Sockets) -> ExitCode {
     let mut server = Server::new();
-    if let Some(ss) = &plan.self_signed {
-        match &ss.generated {
-            Some(why) => tracing::info!(
-                "generated a self-signed certificate ({why}): {}",
-                ss.paths.cert.display()
-            ),
-            None => tracing::info!("using self-signed certificate {}", ss.paths.cert.display()),
-        }
-    }
-    // TODO(#17): a proper banner.
-    for l in &config.listeners {
+    if let Some(ss) = &plan.self_signed
+        && let Some(why) = &ss.generated
+    {
         tracing::info!(
-            "https :{} -> {}",
-            l.mapping.listen_display(),
-            l.mapping.upstream
+            "generated a self-signed certificate ({why}): {}",
+            ss.paths.cert.display()
         );
     }
+    banner::show(&config, &plan);
     if let Err(e) = server.apply(plan.listeners, sockets) {
         return fail(vec![e.to_string()]);
     }
