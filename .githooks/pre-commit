@@ -1,0 +1,19 @@
+#!/bin/sh
+# Checks that must pass before every commit (see CLAUDE.md).
+# Enable once per clone with: git config core.hooksPath .githooks
+set -e
+
+if ! command -v cargo-deny >/dev/null 2>&1; then
+    echo "pre-commit: cargo-deny is not installed; run: cargo install --locked cargo-deny" >&2
+    exit 1
+fi
+
+cargo fmt --check
+cargo clippy --quiet --all-targets -- -D warnings
+cargo test --quiet
+
+# Refresh the advisory database, but don't block commits when offline.
+if ! cargo deny --log-level error fetch db >/dev/null 2>&1; then
+    echo "pre-commit: couldn't refresh the advisory database; using the cached copy" >&2
+fi
+cargo deny --log-level error --offline check --hide-inclusion-graph advisories bans licenses sources

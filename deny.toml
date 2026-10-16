@@ -1,0 +1,43 @@
+# cargo deny configuration. Run `cargo deny check` (the pre-commit hook does).
+
+[graph]
+# ferry ships for macOS and Linux only; ignore Windows and wasm dependencies.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-musl",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+]
+
+[advisories]
+# RustSec advisory database (the default source).
+db-urls = ["https://github.com/rustsec/advisory-db"]
+unmaintained = "workspace"
+yanked = "deny"
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+deny = [
+    # Crypto backend is ring only: aws-lc-rs breaks easy static musl builds.
+    { crate = "aws-lc-rs", reason = "ferry uses ring; aws-lc-rs breaks static musl builds" },
+    { crate = "aws-lc-sys", reason = "ferry uses ring; aws-lc-rs breaks static musl builds" },
+]
+
+[licenses]
+allow = [
+    "Apache-2.0",
+    "BSD-3-Clause",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+]
+confidence-threshold = 0.9
+# ring's Cargo.toml declares "Apache-2.0 AND ISC", which is what cargo deny
+# reads. (GitHub shows NOASSERTION for ring, which doesn't matter here.)
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

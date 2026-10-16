@@ -17,9 +17,12 @@ cargo build
 cargo test                                   # unit + end-to-end tests
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings    # must be clean
+cargo deny check                             # advisories, bans, licenses (deny.toml)
 ```
 
-All four must pass before every commit.
+All of these must pass before every commit. `.githooks/pre-commit` runs them;
+enable it once per clone with `git config core.hooksPath .githooks` (needs
+`cargo install --locked cargo-deny`).
 
 ## Layout
 
