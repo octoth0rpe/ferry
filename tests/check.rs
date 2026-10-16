@@ -1,12 +1,18 @@
 mod common;
 
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
 use common::*;
 
 fn write_cert(dir: &TempDir, name: &str, days: i64) -> (String, String) {
     let mut params = rcgen::CertificateParams::new(vec!["localhost".to_string()]).unwrap();
-    let now = time::OffsetDateTime::now_utc();
-    params.not_before = now - time::Duration::days(400);
-    params.not_after = now + time::Duration::days(days);
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let at = |secs: i64| rcgen::date_time_ymd(1970, 1, 1) + Duration::from_secs(secs as u64);
+    params.not_before = at(now - 400 * 86_400);
+    params.not_after = at(now + days * 86_400);
     let key = rcgen::KeyPair::generate().unwrap();
     let cert = params.self_signed(&key).unwrap();
     let (c, k) = (

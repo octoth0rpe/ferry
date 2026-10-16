@@ -8,16 +8,16 @@ use std::fs;
 use std::io::Write;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::Path;
+use std::time::Duration;
 
 use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair};
-use time::{Duration, OffsetDateTime};
 
 use rustls::pki_types::CertificateDer;
 use rustls::pki_types::pem::PemObject;
 
 use crate::config::CertKey;
 use crate::tls::{self, LoadedCert};
-use crate::{der, net};
+use crate::{date, der, net};
 
 /// Regenerate when the cert expires sooner than this.
 const RENEW_BEFORE_DAYS: i64 = 30;
@@ -60,7 +60,7 @@ pub fn wanted_names() -> BTreeSet<String> {
 
 /// Whether the stored certificate is due to be replaced.
 pub fn expires_soon() -> bool {
-    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let now = date::now();
     match paths().and_then(|p| tls::load(&p)) {
         Ok(cert) => cert.not_after - now < RENEW_BEFORE_DAYS * 86_400,
         Err(_) => true,
@@ -80,7 +80,7 @@ pub struct SelfSigned {
 pub fn load_or_create() -> Result<SelfSigned, String> {
     let paths = paths()?;
     let wanted = wanted_names();
-    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let now = date::now();
 
     let reason = match (paths.cert.exists() && paths.key.exists()).then(|| tls::load(&paths)) {
         None => "none existed yet".to_string(),
@@ -129,9 +129,10 @@ fn generate(paths: &CertKey, names: &BTreeSet<String>) -> Result<(), String> {
     let mut dn = DistinguishedName::new();
     dn.push(DnType::CommonName, "ferry self-signed certificate");
     params.distinguished_name = dn;
-    let now = OffsetDateTime::now_utc();
-    params.not_before = now - Duration::days(1);
-    params.not_after = now + Duration::days(VALID_DAYS);
+    let at = |secs: i64| rcgen::date_time_ymd(1970, 1, 1) + Duration::from_secs(secs as u64);
+    let now = date::now();
+    params.not_before = at(now - 86_400);
+    params.not_after = at(now + VALID_DAYS * 86_400);
     let key = KeyPair::generate().map_err(|e| err(&e))?;
     let cert = params.self_signed(&key).map_err(|e| err(&e))?;
 
@@ -184,7 +185,7 @@ mod tests {
         generate(&paths, &names).unwrap();
 
         let loaded = tls::load(&paths).unwrap();
-        assert!(loaded.not_after > OffsetDateTime::now_utc().unix_timestamp() + 300 * 86_400);
+        assert!(loaded.not_after > date::now() + 300 * 86_400);
         assert_eq!(cert_names(&paths.cert).unwrap(), names);
         let mode = fs::metadata(&paths.key).unwrap().permissions();
         assert_eq!(
