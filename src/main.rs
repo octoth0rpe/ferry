@@ -203,19 +203,7 @@ async fn run(
             .iter()
             .map(|l| l.mapping.upstream.clone())
             .collect();
-        tokio::spawn(async move {
-            let missing = child::wait_for_upstreams(&upstreams, child::STARTUP_WAIT).await;
-            child::started();
-            if let Some(banner) = banner {
-                eprint!("{banner}");
-            }
-            for upstream in missing {
-                tracing::warn!(
-                    "nothing is listening on {upstream} after {:?}; is that where your app listens?",
-                    child::STARTUP_WAIT
-                );
-            }
-        });
+        tokio::spawn(child::watch_startup(upstreams, banner));
     }
 
     let mut watcher = watch::FileWatcher::new();

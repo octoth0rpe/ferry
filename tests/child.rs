@@ -112,3 +112,66 @@ fn a_command_needs_the_foreground() {
     assert_eq!(code, 1, "{err}");
     assert!(err.contains("needs ferry in the foreground"), "{err}");
 }
+
+#[tokio::test]
+async fn one_app_listening_is_enough_to_start() {
+    // Two mappings, but the command only ever serves the first.
+    let (up1, up2) = (free_port(), free_port());
+    let (p1, p2) = (free_port(), free_port());
+    tcp_upstream(&format!("127.0.0.1:{up1}")).await;
+    let started = Instant::now();
+    let ferry = Ferry::start(
+        &[
+            &format!("{p1}:{up1}"),
+            &format!("{p2}:{up2}"),
+            "--",
+            "sleep",
+            "30",
+        ],
+        p1,
+    );
+    let err = ferry.wait_for_stderr(&format!("https://localhost:{p1}"));
+    assert!(err.contains(&format!("https://localhost:{p1}")), "{err}");
+    let resp = client(false)
+        .get(format!("https://localhost:{p1}/"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.text().await.unwrap(), "hello from upstream");
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+#[tokio::test]
+async fn each_port_waits_for_its_own_app() {
+    let (up1, up2) = (free_port(), free_port());
+    let (p1, p2) = (free_port(), free_port());
+    tcp_upstream(&format!("127.0.0.1:{up1}")).await;
+    let _ferry = Ferry::start(
+        &[
+            &format!("{p1}:{up1}"),
+            &format!("{p2}:{up2}"),
+            "--",
+            "sleep",
+            "30",
+        ],
+        p1,
+    );
+    // The second app starts a little later; its request waits for it.
+    let request = tokio::spawn(async move {
+        client(false)
+            .get(format!("https://localhost:{p2}/"))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap()
+    });
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    tcp_upstream(&format!("127.0.0.1:{up2}")).await;
+    assert_eq!(request.await.unwrap(), "hello from upstream");
+}

@@ -207,10 +207,12 @@ ferry 6005:5173 -- npm run dev
 - The command shares the terminal: you see its output, and it can read your
   keystrokes (Vite's shortcuts work).
 - Requests that arrive before the app is listening wait for it, for up to 30
-  seconds, instead of getting an error page.
-- ferry's banner, with its URLs and QR code, appears once the app is
-  listening, below the app's own startup output, even if the dev server
-  clears the screen.
+  seconds, instead of getting an error page. With several mappings, each
+  waits only for its own upstream.
+- ferry's banner, with its URLs and QR codes, appears as soon as one
+  upstream is listening, below the app's own startup output, even if the dev
+  server clears the screen. An upstream still silent after 30 seconds gets a
+  warning.
 - Ctrl-C stops both. ferry passes SIGTERM on, and exits when the command
   does, with its exit code.
 

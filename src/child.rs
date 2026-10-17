@@ -21,10 +21,20 @@ use crate::mapping::Upstream;
 /// waits before showing anyway.
 pub const STARTUP_WAIT: Duration = Duration::from_secs(30);
 
-/// `true` while the child is starting. Unset when there's no child.
-static STARTING: OnceLock<watch::Sender<bool>> = OnceLock::new();
+/// Which upstreams have started listening, while the command is starting.
+#[derive(Default)]
+struct Startup {
+    up: Vec<Upstream>,
+    /// The command has exited, or it's been [`STARTUP_WAIT`]: stop holding
+    /// requests.
+    over: bool,
+}
 
-/// Starts `command`, with requests held until [`started`] is called.
+/// Set when ferry runs a command.
+static STARTUP: OnceLock<watch::Sender<Startup>> = OnceLock::new();
+
+/// Starts `command`. Requests are held until their upstream listens; see
+/// [`wait_for`] and [`watch_startup`].
 pub fn spawn(command: &[OsString]) -> Result<Child, String> {
     let (program, args) = command.split_first().expect("a command has a program");
     let child = Command::new(program).args(args).spawn().map_err(|e| {
@@ -37,44 +47,70 @@ pub fn spawn(command: &[OsString]) -> Result<Child, String> {
             }
         )
     })?;
-    let _ = STARTING.set(watch::Sender::new(true));
+    let _ = STARTUP.set(watch::Sender::new(Startup::default()));
     Ok(child)
 }
 
-/// Lets held requests through: the app is listening, it's been too long, or
-/// it has exited.
+/// Stops holding requests: the command has exited, or it's been too long.
 pub fn started() {
-    if let Some(starting) = STARTING.get() {
-        starting.send_replace(false);
+    if let Some(startup) = STARTUP.get() {
+        startup.send_modify(|s| s.over = true);
     }
 }
 
-/// Waits while the child is starting, so a request that arrives before the
-/// app listens is answered by the app rather than with an error page.
-pub async fn wait_until_started() {
-    if let Some(starting) = STARTING.get() {
-        let _ = starting.subscribe().wait_for(|starting| !starting).await;
+/// Waits while the command is starting and `upstream` isn't listening yet,
+/// so a request that arrives early is answered by the app rather than with
+/// an error page. Each request waits only for its own upstream.
+pub async fn wait_for(upstream: &Upstream) {
+    if let Some(startup) = STARTUP.get() {
+        let _ = startup
+            .subscribe()
+            .wait_for(|s| s.over || s.up.contains(upstream))
+            .await;
     }
 }
 
-/// Waits until every upstream accepts connections, for up to `timeout`.
-/// Returns those that still don't.
-pub async fn wait_for_upstreams(upstreams: &[Upstream], timeout: Duration) -> Vec<Upstream> {
-    let deadline = tokio::time::Instant::now() + timeout;
-    let mut waiting: Vec<Upstream> = upstreams.to_vec();
+/// Watches `upstreams` while the command starts: prints `banner` once the
+/// first one is listening (or after [`STARTUP_WAIT`] if none is), lets
+/// requests for each through as it starts listening, and after
+/// [`STARTUP_WAIT`] stops holding requests and warns about any still silent.
+pub async fn watch_startup(upstreams: Vec<Upstream>, banner: Option<String>) {
+    let Some(startup) = STARTUP.get() else {
+        return;
+    };
+    let deadline = tokio::time::Instant::now() + STARTUP_WAIT;
+    let mut waiting = upstreams;
     waiting.dedup();
+    let mut banner = banner;
+    let mut any_up = false;
     loop {
         let mut still = Vec::new();
         for upstream in waiting {
-            if !accepts(&upstream).await {
+            if accepts(&upstream).await {
+                any_up = true;
+                startup.send_modify(|s| s.up.push(upstream));
+            } else {
                 still.push(upstream);
             }
         }
         waiting = still;
-        if waiting.is_empty() || tokio::time::Instant::now() >= deadline {
-            return waiting;
+        let timed_out = tokio::time::Instant::now() >= deadline;
+        if (any_up || timed_out)
+            && let Some(banner) = banner.take()
+        {
+            eprint!("{banner}");
+        }
+        if waiting.is_empty() || timed_out || startup.borrow().over {
+            break;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    started();
+    for upstream in waiting {
+        tracing::warn!(
+            "nothing is listening on {upstream} after {STARTUP_WAIT:?}; is that where your \
+             app listens?"
+        );
     }
 }
 
@@ -149,20 +185,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn waits_for_upstreams() {
+    async fn accepts_only_listening_upstreams() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let up = Upstream::Tcp {
             host: "127.0.0.1".into(),
             port: listener.local_addr().unwrap().port(),
         };
-        assert!(
-            wait_for_upstreams(std::slice::from_ref(&up), Duration::ZERO)
-                .await
-                .is_empty()
-        );
+        assert!(accepts(&up).await);
         drop(listener);
-        let missing =
-            wait_for_upstreams(std::slice::from_ref(&up), Duration::from_millis(200)).await;
-        assert_eq!(missing, vec![up]);
+        assert!(!accepts(&up).await);
     }
 }

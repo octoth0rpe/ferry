@@ -96,9 +96,11 @@ Run
 alongside ferry, typically a development server:
 .B ferry 6005:5173 \-\- npm run dev .
 The command shares ferry's terminal (stdin, stdout and stderr). Requests
-that arrive before every upstream accepts connections are held, for up to 30
-seconds, instead of getting an error page, and the banner is printed once
-they all do, below the command's own startup output. SIGTERM is passed on to
+that arrive before their upstream accepts connections are held, for up to 30
+seconds, instead of getting an error page; each waits only for its own
+upstream. The banner is printed as soon as one upstream accepts
+connections, below the command's own startup output, and ferry warns about
+any still not listening after 30 seconds. SIGTERM is passed on to
 the command, and SIGINT too unless it came from the terminal (where the
 command gets it directly). ferry exits when the command does, with its exit
 status. Not allowed with

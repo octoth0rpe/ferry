@@ -48,10 +48,10 @@ enable it once per clone with `git config core.hooksPath .githooks` (needs
   Names a root can't cover are dropped from the server cert; IPs with a
   warning.
 - `child.rs`: `ferry MAPPING -- COMMAND` (CLI only, foreground only). Spawns
-  the command, holds requests (`wait_until_started`, a global gate) until
-  every upstream accepts connections, forwards SIGTERM (SIGINT only when not
-  from the terminal), exits with its status. The banner is printed once the
-  upstreams are up.
+  the command, holds each request until its own upstream accepts
+  connections (`wait_for`, fed by `watch_startup`; up to 30s), forwards
+  SIGTERM (SIGINT only when not from the terminal), exits with its status.
+  The banner is printed once any upstream is up.
 - `trust.rs`: the trust page, plain HTTP on its own OS-picked port (a
   `Kind::Trust` listener keyed `(bind, 0)`, so reloads keep it) when the
   local CA is used; never on app ports. It serves the root, per-platform
