@@ -187,9 +187,10 @@ instead set `security.enterprise_roots.enabled` to `true` in Firefox's
 your phone:
 
 - **iPhone and iPad:** open the page in Safari (only Safari can install
-  profiles), download the certificate, install the profile from Settings,
-  then turn on full trust under Settings → General → About → Certificate Trust
-  Settings.
+  profiles) and download the certificate. Install the profile from Settings →
+  General → VPN & Device Management within 8 minutes (iOS discards it after
+  that), then turn on full trust under Settings → General → About →
+  Certificate Trust Settings.
 - **Android:** download the certificate, then install it from Settings →
   Security → Encryption & credentials → Install a certificate → CA
   certificate. Android then shows "Network may be monitored"; that's expected.

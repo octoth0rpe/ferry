@@ -226,8 +226,9 @@ have swapped the certificate.</p>
 certificates.</li>
 <li><a class=button href="/.ferry/ca.crt">Download the certificate</a>, then
 tap <b>Allow</b>.</li>
-<li>Open <b>Settings</b>, tap <b>Profile Downloaded</b> near the top, then
-<b>Install</b>.</li>
+<li>Open <b>Settings → General → VPN &amp; Device Management</b>, tap
+<b>{name}</b> under Downloaded Profile, then <b>Install</b>. Do this within
+8 minutes: iOS discards a downloaded profile that isn't installed.</li>
 <li>Go to <b>Settings → General → About → Certificate Trust Settings</b> and
 turn on <b>{name}</b>.</li>
 </ol>

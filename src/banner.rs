@@ -124,10 +124,7 @@ fn trust_section(config: &Config, ca: &LocalCa, color: bool, qr: bool) -> String
         .collect();
     if let Some((first, rest)) = lan_pages.split_first() {
         if qr {
-            let _ = writeln!(
-                out,
-                "  on a phone, scan this to trust the CA (on an iPhone, open it in Safari):"
-            );
+            let _ = writeln!(out, "  on a phone, scan this to trust the CA:");
             for line in qr_code(first, color) {
                 let _ = writeln!(out, "  {line}");
             }
@@ -138,9 +135,23 @@ fn trust_section(config: &Config, ca: &LocalCa, color: bool, qr: bool) -> String
         for page in rest {
             let _ = writeln!(out, "  {dim}  or {page}{reset}");
         }
+        for line in PHONE_STEPS {
+            let _ = writeln!(out, "  {dim}{line}{reset}");
+        }
     }
     out
 }
+
+/// The `/.ferry/` page's steps in brief, for people looking at the terminal
+/// rather than the phone.
+const PHONE_STEPS: [&str; 6] = [
+    "iPhone:  open the page in Safari and download the certificate. Then Settings →",
+    "         General → VPN & Device Management → ferry local CA → Install (within",
+    "         8 minutes), and General → About → Certificate Trust Settings → turn on",
+    "         ferry local CA.",
+    "Android: download the certificate, then Settings → search \"CA certificate\" →",
+    "         Install anyway → ferry-ca.crt.",
+];
 
 /// A QR code drawn with half blocks, two rows of modules to a line. With
 /// `color`, it's black on white whatever the terminal's colours; without, it

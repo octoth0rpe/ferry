@@ -34,8 +34,9 @@ Scan the QR code in ferry's banner to trust the CA, then open
 
 Also worth checking each time:
 
-- **iOS:** does the QR code open in Safari, and does the CA show up in
-  Certificate Trust Settings? Does the fingerprint under Settings → General →
+- **iOS:** does the QR code open in Safari? Does the profile appear under
+  Settings → General → VPN & Device Management, and after installing it, does
+  the CA show up in Certificate Trust Settings? Does the fingerprint under Settings → General →
   VPN & Device Management → the profile → More Details match the banner?
 - **Android:** does `/.ferry/ferry-ca.crt` land in Downloads, and can it be
   installed from Settings → CA certificate?
