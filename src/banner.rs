@@ -13,12 +13,12 @@ use crate::mapping::Upstream;
 use crate::server::{Kind, Plan};
 use crate::{dirs, net, trust};
 
-/// Builds the banner text. `color` adds bold/dim ANSI styling; `qr` shows QR
+/// Builds the banner text. `color` adds bold ANSI styling; `qr` shows QR
 /// codes for phones: one for trusting the local CA, one for each app.
 pub fn render(config: &Config, plan: &Plan, color: bool, qr: bool) -> String {
-    let (bold, dim, reset) = match color {
-        true => ("\x1b[1m", "\x1b[2m", "\x1b[0m"),
-        false => ("", "", ""),
+    let (bold, reset) = match color {
+        true => ("\x1b[1m", "\x1b[0m"),
+        false => ("", ""),
     };
     let lan_ips = net::local_ips();
     let mut out = format!("{bold}ferry {}{reset}\n", env!("CARGO_PKG_VERSION"));
@@ -32,14 +32,14 @@ pub fn render(config: &Config, plan: &Plan, color: bool, qr: bool) -> String {
         let urls = urls(m.bind, m.port, &lan_ips);
         let _ = writeln!(out, "  {bold}{}{reset}  →  {upstream}", urls[0]);
         for url in &urls[1..] {
-            let _ = writeln!(out, "  {dim}{url}{reset}");
+            let _ = writeln!(out, "  {url}");
         }
     }
     for m in config.listeners.iter().map(|l| &l.mapping) {
         if let Some(from) = m.redirect_from {
             let _ = writeln!(
                 out,
-                "  {dim}http on {} redirects to https on {}{reset}",
+                "  http on {} redirects to https on {}",
                 crate::mapping::listen_display(m.bind, from),
                 m.port
             );
@@ -59,7 +59,7 @@ pub fn render(config: &Config, plan: &Plan, color: bool, qr: bool) -> String {
         .collect();
     certs.dedup();
     for cert in certs {
-        let _ = writeln!(out, "  {dim}cert: {cert}{reset}");
+        let _ = writeln!(out, "  cert: {cert}");
     }
     if let Some(ca) = &plan.local_ca {
         out.push_str(&trust_section(plan, ca, color));
@@ -70,9 +70,9 @@ pub fn render(config: &Config, plan: &Plan, color: bool, qr: bool) -> String {
 
 /// The local CA's fingerprint, and where to trust it on this computer.
 fn trust_section(plan: &Plan, ca: &LocalCa, color: bool) -> String {
-    let (bold, dim, reset) = match color {
-        true => ("\x1b[1m", "\x1b[2m", "\x1b[0m"),
-        false => ("", "", ""),
+    let (bold, reset) = match color {
+        true => ("\x1b[1m", "\x1b[0m"),
+        false => ("", ""),
     };
     let mut out = String::new();
     if ca.created.is_some() && ca.paths.old_self_signed.exists() {
@@ -84,13 +84,13 @@ fn trust_section(plan: &Plan, ca: &LocalCa, color: bool) -> String {
         );
     }
     let [fp1, fp2] = trust::fingerprint_lines(&ca.fingerprint);
-    let _ = writeln!(out, "  {dim}CA fingerprint (SHA-256):{reset}");
-    let _ = writeln!(out, "  {dim}  {fp1}{reset}");
-    let _ = writeln!(out, "  {dim}  {fp2}{reset}");
+    let _ = writeln!(out, "  CA fingerprint (SHA-256):");
+    let _ = writeln!(out, "    {fp1}");
+    let _ = writeln!(out, "    {fp2}");
     if let Some((port, _)) = trust_listener(plan) {
         let _ = writeln!(
             out,
-            "  {dim}NOTE: Browsers will warn until you trust the CA; see {}{reset}",
+            "  NOTE: Browsers will warn until you trust the CA; see {}",
             trust_page("localhost", port)
         );
     }
@@ -101,10 +101,6 @@ fn trust_section(plan: &Plan, ca: &LocalCa, color: bool) -> String {
 /// the local CA, with the steps in brief, and each app's address. With `qr`,
 /// as QR codes side by side.
 fn phone_section(config: &Config, plan: &Plan, color: bool, qr: bool) -> String {
-    let (dim, reset) = match color {
-        true => ("\x1b[2m", "\x1b[0m"),
-        false => ("", ""),
-    };
     let Some(ip) = net::lan_ips_best_first()
         .into_iter()
         .find(|ip| ip.is_ipv4())
@@ -119,9 +115,9 @@ fn phone_section(config: &Config, plan: &Plan, color: bool, qr: bool) -> String 
     let mut out = String::new();
     if !qr {
         if let Some(page) = &trust {
-            let _ = writeln!(out, "  {dim}On a phone, trust the CA at {page}{reset}");
+            let _ = writeln!(out, "  On a phone, trust the CA at {page}");
             for line in &PHONE_STEPS[1..] {
-                let _ = writeln!(out, "  {dim}  {line}{reset}");
+                let _ = writeln!(out, "    {line}");
             }
         }
         return out;
@@ -135,7 +131,7 @@ fn phone_section(config: &Config, plan: &Plan, color: bool, qr: bool) -> String 
             .chain(
                 PHONE_STEPS
                     .iter()
-                    .map(|line| (format!("{dim}{line}{reset}"), line.chars().count())),
+                    .map(|line| (line.to_string(), line.chars().count())),
             )
             .collect();
         let qr = panel("On a phone, scan this first:", page, color);
@@ -161,7 +157,7 @@ fn phone_section(config: &Config, plan: &Plan, color: bool, qr: bool) -> String 
         })
         .collect();
     if trust.is_some() && !apps.is_empty() {
-        let _ = writeln!(out, "  {dim}{}{reset}", "─".repeat(76));
+        let _ = writeln!(out, "  {}", "─".repeat(76));
     }
     for line in rows(&apps).concat() {
         let _ = writeln!(out, "  {line}");
