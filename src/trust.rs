@@ -155,6 +155,18 @@ fn sh_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', r"'\''"))
 }
 
+/// The first and last three bytes of a fingerprint: enough to compare by
+/// eye against the full one a phone or the trust page shows.
+pub fn short_fingerprint(fingerprint: &str) -> String {
+    match (
+        fingerprint.get(..8),
+        fingerprint.get(fingerprint.len().saturating_sub(8)..),
+    ) {
+        (Some(start), Some(end)) if fingerprint.len() > 16 => format!("{start}…{end}"),
+        _ => fingerprint.to_string(),
+    }
+}
+
 /// The fingerprint in two halves, which fit on a phone screen and in an
 /// 80-column terminal.
 pub fn fingerprint_lines(fingerprint: &str) -> [&str; 2] {
@@ -209,9 +221,9 @@ li {{ margin: .4em 0; }}
 <p>ferry signs its HTTPS certificates with <b>{name}</b>. Trust it once on a
 device and every ferry on this computer works there without warnings,
 service workers included.</p>
-<p>Check this fingerprint (SHA-256) matches the one ferry printed when it
-started. This page came over plain HTTP, so on a shared network someone could
-have swapped the certificate.</p>
+<p>Check that this fingerprint (SHA-256) starts and ends the same as the one
+on ferry's <code>cert:</code> line in the terminal. This page came over plain
+HTTP, so on a shared network someone could have swapped the certificate.</p>
 <pre>{fp1}
 {fp2}</pre>
 
@@ -259,6 +271,13 @@ mod tests {
         assert_eq!(sh_quote("it's"), r"'it'\''s'");
         assert_eq!(sh_quote(""), "''");
         assert_eq!(sh_quote("~x"), "'~x'");
+    }
+
+    #[test]
+    fn shortens_fingerprints() {
+        let fp = crate::ca::fingerprint(b"");
+        assert_eq!(short_fingerprint(&fp), "E3:B0:C4…52:B8:55");
+        assert_eq!(short_fingerprint("AB:CD"), "AB:CD");
     }
 
     #[test]

@@ -52,7 +52,11 @@ pub fn render(config: &Config, plan: &Plan, color: bool, qr: bool) -> String {
         .map(|l| match l.cert_key(config) {
             Some(ck) => tilde(&ck.cert),
             None => match &plan.local_ca {
-                Some(ca) => format!("ferry local CA ({})", tilde(&ca.paths.root.cert)),
+                Some(ca) => format!(
+                    "ferry local CA ({}), SHA-256 {}",
+                    tilde(&ca.paths.root.cert),
+                    trust::short_fingerprint(&ca.fingerprint)
+                ),
                 None => "ferry local CA".into(),
             },
         })
@@ -68,7 +72,7 @@ pub fn render(config: &Config, plan: &Plan, color: bool, qr: bool) -> String {
     out
 }
 
-/// The local CA's fingerprint, and where to trust it on this computer.
+/// Where to trust the local CA.
 fn trust_section(plan: &Plan, ca: &LocalCa, color: bool) -> String {
     let (bold, reset) = match color {
         true => ("\x1b[1m", "\x1b[0m"),
@@ -83,10 +87,6 @@ fn trust_section(plan: &Plan, ca: &LocalCa, color: bool) -> String {
             tilde(&ca.paths.old_self_signed)
         );
     }
-    let [fp1, fp2] = trust::fingerprint_lines(&ca.fingerprint);
-    let _ = writeln!(out, "  CA fingerprint (SHA-256):");
-    let _ = writeln!(out, "    {fp1}");
-    let _ = writeln!(out, "    {fp2}");
     if let Some((port, lan)) = trust_listener(plan) {
         // The LAN address works here and from other devices; localhost only
         // when there's nothing else.

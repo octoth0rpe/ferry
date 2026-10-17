@@ -13,10 +13,7 @@ ferry 6005:5173 -- npm run dev
 ferry 0.1.0
   https://localhost:6005  →  http://localhost:5173
   https://192.168.1.20:6005
-  cert: ferry local CA (~/Library/Application Support/ferry/ca.pem)
-  CA fingerprint (SHA-256):
-    03:0B:A0:99:DC:39:A1:83:8F:C7:78:3B:B2:1A:DB:BB
-    62:15:FB:C0:95:2B:0B:AF:8F:B7:F8:67:E0:EC:72:DA
+  cert: ferry local CA (~/Library/Application Support/ferry/ca.pem), SHA-256 03:0B:A0…EC:72:DA
   NOTE: Browsers will warn until you trust the CA; see http://192.168.1.20:52814/
 
   On a phone, scan this first:
@@ -115,7 +112,7 @@ QR codes mean you never type an IP address on a phone.
 `*.local`) and private addresses. If its key ever leaked, it couldn't be used
 to impersonate other websites to your phone (Android ignores this limit; see
 [The local CA](#the-local-ca)). The setup page comes over plain HTTP, so check
-its fingerprint matches the one in ferry's banner.
+its fingerprint starts and ends the same as the one on ferry's `cert:` line.
 
 **Try it** with the small PWA in `tools/pwa-test`. It reports whether it's
 in a secure context, whether its service worker is running, and whether it's

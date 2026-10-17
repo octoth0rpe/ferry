@@ -87,8 +87,9 @@ async fn the_trust_page_has_a_port_of_its_own() {
     let resp = http.post(&page).send().await.unwrap();
     assert_eq!(resp.status(), 405);
 
-    // The banner shows the same fingerprint.
-    assert!(ferry.stderr().contains(&fp[..47]), "{}", ferry.stderr());
+    // The banner's cert line shows the start and end of the same one.
+    let short = format!("SHA-256 {}…{}", &fp[..8], &fp[fp.len() - 8..]);
+    assert!(ferry.stderr().contains(&short), "{}", ferry.stderr());
 }
 
 #[tokio::test]
