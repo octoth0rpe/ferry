@@ -173,27 +173,97 @@ install somewhere else, pass `--root`: `cargo install --path . --root
 
 Or run `cargo build --release`; the binary is at `target/release/ferry`.
 
-## Quick start
+## Quick start: what do you want to do?
+
+**"I want HTTPS for my dev server on port 5173."**
 
 ```sh
-# HTTPS on 6005 for an app on 6006, with a certificate from ferry's local CA
-ferry 6005:6006
-
-# Your own certificate, several apps at once
-ferry ./fullchain.pem ./privkey.pem 443:3000 8443:3001
-
-# A public server: HTTPS on 443, and port 80 redirecting to it
-ferry ./fullchain.pem ./privkey.pem 80/443:3000
-
-# An app listening on a Unix socket
-ferry 443:/run/app.sock
-
-# Everything in a config file
-ferry -c ferry.toml
-
-# Start your dev server along with ferry
-ferry 6005:5173 -- npm run dev
+ferry 5273:5173
 ```
+
+`https://localhost:5273` now reaches your app. The certificate comes from
+ferry's local CA, so trust that once and browsers stop warning.
+
+**"Can ferry start the dev server too?"**
+
+```sh
+ferry 5273:5173 -- npm run dev
+```
+
+Everything after `--` is run alongside ferry. Requests wait until the app is
+listening, and Ctrl-C stops both. See
+[Running your app with ferry](#running-your-app-with-ferry).
+
+**"I want to try it on my phone."**
+
+Same command. Scan the first QR code in the banner to trust ferry's CA (once
+per phone), then the second to open the app. See
+[Your dev server on your phone](#your-dev-server-on-your-phone).
+
+**"My frontend calls an API server on port 8000."**
+
+```sh
+ferry 5273:5173 8443:8000
+```
+
+Once the page is HTTPS, browsers block its requests to a plain-HTTP API as
+mixed content, so give the API its own HTTPS port and point the frontend at
+`https://…:8443`.
+
+**"Only this machine should be able to connect."**
+
+```sh
+ferry 127.0.0.1:5273:5173
+```
+
+Without an address, ferry listens on every interface, so phones and other
+computers can reach it.
+
+**"My app listens on a Unix socket."**
+
+```sh
+ferry 9001:./app.sock          # relative to where you run ferry
+ferry 9001:/run/app/app.sock   # or absolute
+```
+
+**"The app is on another machine or in a container."**
+
+```sh
+ferry 5273:10.0.0.5:8080
+ferry 5273:http://app:8080
+```
+
+**"This is a real server. I have a certificate, and plain HTTP on port 80
+should redirect to HTTPS on 443."**
+
+```sh
+sudo ferry ./fullchain.pem ./privkey.pem 80/443:3000
+```
+
+Port 80 only ever redirects; ferry opens no ports you didn't name. On Linux,
+use `CAP_NET_BIND_SERVICE` instead of `sudo`; see the
+[systemd example](#systemd).
+
+**"Run it in the background, with logs."**
+
+```sh
+ferry -d --pid-file ferry.pid --access-log access.log --error-log error.log 80/443:3000
+```
+
+**"I'd rather keep all this in a file."**
+
+```sh
+ferry --print-config ./fullchain.pem ./privkey.pem 80/443:3000 > ferry.toml
+ferry -t -c ferry.toml    # check it
+ferry -c ferry.toml       # run it
+```
+
+ferry reloads the file when it changes. See [Config file](#config-file).
+
+**"I'm ready to ship. What would this be in nginx or Caddy?"**
+
+Coming in v0.3: `ferry --print-config nginx` and `--print-config caddy` will
+write an equivalent config for the same setup.
 
 ### Running your app with ferry
 
