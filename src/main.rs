@@ -1,4 +1,5 @@
 mod banner;
+mod ca;
 mod check;
 mod cli;
 mod config;
@@ -10,9 +11,9 @@ mod log;
 mod mapping;
 mod net;
 mod proxy;
-mod selfsigned;
 mod server;
 mod tls;
+mod trust;
 mod upstream;
 mod watch;
 
@@ -29,6 +30,10 @@ use crate::config::Config;
 use crate::server::Server;
 
 fn main() -> ExitCode {
+    // ferry listens before its signal handlers are installed in `run`, and
+    // SIGHUP and SIGUSR1 would kill it until then. Hold them until it's
+    // ready; one that arrives meanwhile is delivered then, not lost.
+    held_signals().thread_block().expect("can block signals");
     let cli = cli::Cli::parse();
     if let Some(shell) = cli.completions {
         cli::Cli::print_completions(shell);
@@ -89,15 +94,15 @@ fn main() -> ExitCode {
     {
         return fail(vec![e]);
     }
-    if let Some(ss) = &plan.self_signed
-        && let Some(why) = &ss.generated
+    if let Some(ca) = &plan.local_ca
+        && let Some(why) = &ca.created
     {
         tracing::info!(
-            "generated a self-signed certificate ({why}): {}",
-            ss.paths.cert.display()
+            "created ferry's local CA ({why}): {}",
+            ca.paths.root.cert.display()
         );
     }
-    banner::show(&config, &plan);
+    banner::show(&config, &plan, cli.daemonize);
 
     let write_pid = || pid_path.as_deref().map(daemon::write_pid_file).transpose();
     let _pid_file = if cli.daemonize {
@@ -138,9 +143,12 @@ async fn run(
     let mut sigint = signal(SignalKind::interrupt()).expect("can install SIGINT handler");
     let mut sighup = signal(SignalKind::hangup()).expect("can install SIGHUP handler");
     let mut sigusr1 = signal(SignalKind::user_defined1()).expect("can install SIGUSR1 handler");
+    held_signals()
+        .thread_unblock()
+        .expect("can unblock signals");
 
     let mut server = Server::new();
-    let mut uses_self_signed = plan.self_signed.is_some();
+    let mut issued = issued(&plan);
     let mut access_log = plan.log.clone();
     if let Err(e) = server.apply(plan.listeners, sockets) {
         return fail(vec![e.to_string()]);
@@ -150,9 +158,10 @@ async fn run(
     watcher.set_files(watch::files(&config));
 
     let mut config = config;
-    // Long-running ferries renew their self-signed certificate in place.
-    let mut renewal_check = tokio::time::interval(Duration::from_secs(12 * 3600));
-    renewal_check.tick().await;
+    // Reissue the local CA's server certificate when this machine's names or
+    // addresses change (a laptop joining another network), or it's due.
+    let mut reissue_check = tokio::time::interval(Duration::from_secs(30));
+    reissue_check.tick().await;
 
     loop {
         let reason = tokio::select! {
@@ -167,11 +176,14 @@ async fn run(
                 let names: Vec<String> = changed.iter().map(|p| p.display().to_string()).collect();
                 format!("{} changed", names.join(", "))
             }
-            _ = renewal_check.tick() => {
-                if !(uses_self_signed && selfsigned::expires_soon()) {
-                    continue;
+            _ = reissue_check.tick() => {
+                let reason = issued
+                    .as_ref()
+                    .and_then(|(names, not_after)| ca::LocalCa::reissue_reason(names, *not_after));
+                match reason {
+                    Some(reason) => reason.to_string(),
+                    None => continue,
                 }
-                "self-signed certificate expires soon".to_string()
             }
         };
 
@@ -181,7 +193,7 @@ async fn run(
                     "reloaded configuration ({reason}): {} listener(s)",
                     new_config.listeners.len()
                 );
-                uses_self_signed = plan.uses_self_signed;
+                issued = plan.issued;
                 access_log = plan.log;
                 watcher.set_files(watch::files(&new_config));
                 config = new_config;
@@ -204,8 +216,18 @@ async fn run(
     ExitCode::SUCCESS
 }
 
+/// The names the local CA's server certificate was issued for and when it
+/// expires, if it's in use.
+type Issued = Option<(std::collections::BTreeSet<String>, i64)>;
+
+fn issued(plan: &server::Plan) -> Issued {
+    plan.local_ca
+        .as_ref()
+        .map(|ca| (ca.wanted.clone(), ca.not_after))
+}
+
 struct Reloaded {
-    uses_self_signed: bool,
+    issued: Issued,
     log: std::sync::Arc<log::AccessLogger>,
 }
 
@@ -231,7 +253,7 @@ fn reload(cli: &Cli, cwd: &Path, server: &mut Server) -> Result<(Config, Reloade
         );
     }
     let reloaded = Reloaded {
-        uses_self_signed: plan.self_signed.is_some(),
+        issued: issued(&plan),
         log: plan.log.clone(),
     };
     server
@@ -249,6 +271,15 @@ fn reopen_logs(access_log: &log::AccessLogger) {
         tracing::error!("can't reopen error log: {e}");
     }
     tracing::info!("reopened log files");
+}
+
+/// Signals held during startup; see `main`.
+fn held_signals() -> nix::sys::signal::SigSet {
+    use nix::sys::signal::{SigSet, Signal};
+    let mut set = SigSet::empty();
+    set.add(Signal::SIGHUP);
+    set.add(Signal::SIGUSR1);
+    set
 }
 
 fn fail(errors: Vec<String>) -> ExitCode {

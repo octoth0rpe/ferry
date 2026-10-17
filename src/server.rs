@@ -30,7 +30,7 @@ use crate::config::{AccessLog, Config};
 use crate::log::{AccessLogger, Pending};
 use crate::proxy::{self, Route, error_page};
 use crate::upstream::Body;
-use crate::{net, selfsigned, tls};
+use crate::{ca, net, tls, trust};
 
 /// Identifies a listening socket: bind address (`None` = all) and port.
 pub type ListenKey = (Option<IpAddr>, u16);
@@ -41,6 +41,9 @@ pub struct ListenerState {
     https: Option<Https>,
     log: Arc<AccessLogger>,
     redirect: bool,
+    /// Set when the listener uses ferry's local CA: plain HTTP requests can
+    /// fetch it from `/.ferry/`.
+    trust_page: Option<Arc<trust::Page>>,
     handshake_timeout: Duration,
     idle_timeout: Duration,
 }
@@ -66,8 +69,8 @@ pub struct Plan {
     /// The access log all listeners write to.
     pub log: Arc<AccessLogger>,
     pub warnings: Vec<String>,
-    /// Set when any listener uses the self-signed certificate.
-    pub self_signed: Option<selfsigned::SelfSigned>,
+    /// Set when any listener uses ferry's local CA.
+    pub local_ca: Option<ca::LocalCa>,
 }
 
 /// Loads certificates and builds listener state for a config. Doesn't bind.
@@ -76,7 +79,8 @@ pub fn build(config: &Config) -> Result<Plan, Vec<String>> {
     let mut warnings = Vec::new();
     let mut loaded: HashMap<Option<crate::config::CertKey>, Arc<rustls::ServerConfig>> =
         HashMap::new();
-    let mut self_signed = None;
+    let mut local_ca = None;
+    let mut trust_page = None;
     let mut listeners = Vec::new();
     let log = match AccessLogger::from_config(config) {
         Ok(log) => Arc::new(log),
@@ -96,9 +100,11 @@ pub fn build(config: &Config) -> Result<Plan, Vec<String>> {
             None => {
                 let cert = match &ck {
                     Some(ck) => tls::load(ck),
-                    None => selfsigned::load_or_create().map(|ss| {
-                        let cert = ss.cert.clone();
-                        self_signed = Some(ss);
+                    None => ca::load_or_create(config.advanced.ca_name_constraints).map(|ca| {
+                        let cert = ca.cert.clone();
+                        warnings.extend(ca.warnings.iter().cloned());
+                        trust_page = Some(Arc::new(trust::Page::new(&ca)));
+                        local_ca = Some(ca);
                         cert
                     }),
                 };
@@ -138,6 +144,11 @@ pub fn build(config: &Config) -> Result<Plan, Vec<String>> {
                 }),
                 log: log.clone(),
                 redirect: config.redirect,
+                trust_page: l
+                    .cert_key(config)
+                    .is_none()
+                    .then(|| trust_page.clone())
+                    .flatten(),
                 handshake_timeout: adv.handshake_timeout,
                 idle_timeout: adv.idle_timeout,
             },
@@ -163,6 +174,7 @@ pub fn build(config: &Config) -> Result<Plan, Vec<String>> {
                     https: None,
                     log: log.clone(),
                     redirect: true,
+                    trust_page: trust_page.clone(),
                     handshake_timeout: config.advanced.handshake_timeout,
                     idle_timeout: config.advanced.idle_timeout,
                 },
@@ -176,7 +188,7 @@ pub fn build(config: &Config) -> Result<Plan, Vec<String>> {
             listeners,
             log,
             warnings,
-            self_signed,
+            local_ca,
         })
     } else {
         errors.dedup();
@@ -424,8 +436,9 @@ async fn handle_connection(
     }
 }
 
-/// Answers plain HTTP sent to a TLS port, by redirecting to HTTPS or with a
-/// short explanation.
+/// Answers plain HTTP sent to a TLS port: ferry's `/.ferry/` page if the
+/// port uses the local CA, otherwise a redirect to HTTPS or a short
+/// explanation.
 /// `default_port` is for the port 80 listener: redirect to the default
 /// HTTPS port rather than the same one.
 async fn serve_plain(
@@ -436,13 +449,18 @@ async fn serve_plain(
 ) {
     let redirect = state.redirect;
     let log = state.log.clone();
+    let trust_page = state.trust_page.clone();
     let service = service_fn(move |req: Request<Incoming>| {
         let log = log.clone();
+        let trust_page = trust_page.clone();
         async move {
             let pending = Pending::new(&req, peer);
-            let resp = redirect_response(&req, redirect, default_port);
+            let (resp, upstream) = match trust_page.and_then(|page| page.respond(&req)) {
+                Some(resp) => (resp, "ferry"),
+                None => (redirect_response(&req, redirect, default_port), "redirect"),
+            };
             let id = HeaderValue::from_static("-");
-            Ok::<_, Infallible>(pending.finish(resp, log, &id, "redirect".into()))
+            Ok::<_, Infallible>(pending.finish(resp, log, &id, upstream.into()))
         }
     });
     let _ = hyper::server::conn::http1::Builder::new()

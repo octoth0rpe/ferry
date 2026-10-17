@@ -386,7 +386,7 @@ pub fn error_page(status: StatusCode, message: &str, html: bool) -> Response<Bod
     resp
 }
 
-fn escape_html(s: &str) -> String {
+pub fn escape_html(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")

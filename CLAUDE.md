@@ -39,17 +39,23 @@ enable it once per clone with `git config core.hooksPath .githooks` (needs
   idle and shutdown handling.
 - `proxy.rs`: request forwarding, headers, upgrades, error pages, body limit.
 - `upstream.rs`: hyper-util pooled clients for TCP and Unix sockets.
-- `tls.rs`, `selfsigned.rs`: cert loading and checks, and the persisted
-  self-signed default.
+- `tls.rs`: cert loading and checks.
+- `ca.rs`: the local CA (the zero-config default). The root is persisted; a
+  server cert is issued from it on every start and reload, and again when
+  the machine's names or addresses change. New roots have name constraints
+  (local names, private IPs) unless `[advanced] ca_name_constraints = false`;
+  names a root can't cover are dropped from the server cert with a warning.
+- `trust.rs`: the `/.ferry/` page served over plain HTTP on CA ports (the
+  root, per-platform trust steps, desktop and NSS `certutil` commands).
 - `der.rs`: the few certificate fields ferry reads (notAfter, issuer ==
-  subject, SAN names). Not a general X.509 parser.
+  subject, subject CN, SAN names). Not a general X.509 parser.
 - `log.rs`: access log (written when the response body finishes) and error
   log (tracing). `log::timestamp` is the one timestamp format: ISO 8601 UTC
   with milliseconds.
 - `date.rs`: UTC civil-date arithmetic (days ↔ y/m/d) and formatting. No
   time zones: ferry writes everything in UTC.
-- `check.rs` (`-t`), `banner.rs`, `watch.rs` (reload triggers), `daemon.rs`
-  (`-d`, pid file), `net.rs` (binding).
+- `check.rs` (`-t`), `banner.rs` (including the QR code), `watch.rs`
+  (reload triggers), `daemon.rs` (`-d`, pid file), `net.rs` (binding).
 
 ## Conventions
 
@@ -74,7 +80,7 @@ enable it once per clone with `git config core.hooksPath .githooks` (needs
   `/slow` and `/upgrade`, `Ferry::start`, and HTTPS clients that accept any
   cert.
 - The harness points `HOME` and `XDG_DATA_HOME` at a temp dir. Tests must
-  never touch the real self-signed cert or data directory.
+  never touch the real local CA or data directory.
 - Prefer an end-to-end test for anything a user would notice.
 - Only macOS has been tested so far. Linux is a target but hasn't been built
   or run yet; be careful with platform-specific behaviour (sockets,

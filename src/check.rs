@@ -5,7 +5,7 @@ use std::os::unix::fs::FileTypeExt;
 
 use crate::config::Config;
 use crate::mapping::Upstream;
-use crate::{date, net, selfsigned, tls};
+use crate::{ca, date, net, tls};
 
 /// Warn about certificates expiring sooner than this.
 const EXPIRY_WARNING_DAYS: i64 = 14;
@@ -49,14 +49,14 @@ pub fn check(config: &Config) -> Report {
                 }
                 Err(e) => report.errors.push(e),
             },
-            None => match selfsigned::paths() {
-                Ok(paths) if paths.cert.exists() => report.notes.push(format!(
-                    "no certificate configured; will use the self-signed one at {}",
-                    paths.cert.display()
+            None => match ca::paths() {
+                Ok(paths) if paths.root.cert.exists() => report.notes.push(format!(
+                    "no certificate configured; will issue one from ferry's local CA at {}",
+                    paths.root.cert.display()
                 )),
                 Ok(paths) => report.notes.push(format!(
-                    "no certificate configured; will generate a self-signed one at {}",
-                    paths.cert.display()
+                    "no certificate configured; will create ferry's local CA at {}",
+                    paths.root.cert.display()
                 )),
                 Err(e) => report.errors.push(e),
             },

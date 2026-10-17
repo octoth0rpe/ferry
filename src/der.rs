@@ -1,6 +1,7 @@
 //! Just enough of a DER/X.509 reader for what ferry needs to know about a
-//! certificate: when it expires, whether it's self-signed, and the names in
-//! its subjectAltName.
+//! certificate: when it expires, whether it's self-signed, its subject's
+//! common name, whether it has name constraints, and the names in its
+//! subjectAltName.
 //!
 //! This isn't a general X.509 parser and doesn't verify anything; rustls has
 //! already checked the certificate and key by the time this runs. Every step
@@ -17,11 +18,16 @@ pub struct Cert {
     pub not_after: i64,
     /// Whether the issuer and subject names are identical.
     pub self_signed: bool,
+    /// The subject's commonName, if it has one.
+    pub common_name: Option<String>,
+    /// Whether it has a nameConstraints extension.
+    pub name_constraints: bool,
     /// DNS names and IP addresses from the subjectAltName extension.
     pub names: Vec<String>,
 }
 
 const SEQUENCE: u8 = 0x30;
+const SET: u8 = 0x31;
 const OID: u8 = 0x06;
 const BOOLEAN: u8 = 0x01;
 const OCTET_STRING: u8 = 0x04;
@@ -36,6 +42,10 @@ const DNS_NAME: u8 = 0x82;
 const IP_ADDRESS: u8 = 0x87;
 /// 2.5.29.17, subjectAltName.
 const SAN_OID: &[u8] = &[0x55, 0x1d, 0x11];
+/// 2.5.29.30, nameConstraints.
+const NAME_CONSTRAINTS_OID: &[u8] = &[0x55, 0x1d, 0x1e];
+/// 2.5.4.3, commonName.
+const CN_OID: &[u8] = &[0x55, 0x04, 0x03];
 
 /// Reads the parts of a DER-encoded certificate that ferry uses.
 pub fn parse(der: &[u8]) -> Option<Cert> {
@@ -55,18 +65,51 @@ pub fn parse(der: &[u8]) -> Option<Cert> {
 
     // Then optional issuerUniqueID [1], subjectUniqueID [2], extensions [3].
     let mut names = Vec::new();
+    let mut name_constraints = false;
     while !tbs.0.is_empty() {
         let (tag, value) = tbs.any()?;
         if tag == EXTENSIONS {
-            names = san(Reader(value).only(SEQUENCE)?)?;
+            let extensions = Reader(value).only(SEQUENCE)?;
+            names = san(extensions)?;
+            name_constraints = has_extension(extensions, NAME_CONSTRAINTS_OID)?;
         }
     }
 
     Some(Cert {
         not_after,
         self_signed: issuer == subject,
+        common_name: common_name(subject),
+        name_constraints,
         names,
     })
+}
+
+/// The commonName in a Name (a SEQUENCE of SETs of type-value pairs). Any
+/// string type is accepted, as long as it's UTF-8.
+fn common_name(name: &[u8]) -> Option<String> {
+    let mut rdns = Reader(name);
+    while !rdns.0.is_empty() {
+        let mut attrs = Reader(rdns.next(SET)?);
+        while !attrs.0.is_empty() {
+            let mut attr = Reader(attrs.next(SEQUENCE)?);
+            if attr.next(OID)? == CN_OID {
+                let (_, value) = attr.any()?;
+                return std::str::from_utf8(value).ok().map(String::from);
+            }
+        }
+    }
+    None
+}
+
+/// Whether the contents of the extensions SEQUENCE include `oid`.
+fn has_extension(extensions: &[u8], oid: &[u8]) -> Option<bool> {
+    let mut extensions = Reader(extensions);
+    while !extensions.0.is_empty() {
+        if Reader(extensions.next(SEQUENCE)?).next(OID)? == oid {
+            return Some(true);
+        }
+    }
+    Some(false)
 }
 
 /// The names in the subjectAltName extension, if there is one, from the
@@ -207,6 +250,8 @@ mod tests {
             Cert {
                 not_after: date::days_from_civil(2031, 2, 28) * 86_400,
                 self_signed: true,
+                common_name: Some("rcgen self signed cert".into()),
+                name_constraints: false,
                 names: vec![
                     "localhost".into(),
                     "127.0.0.1".into(),
@@ -255,6 +300,7 @@ mod tests {
         let cert = parse(&der).unwrap();
         assert!(!cert.self_signed);
         assert_eq!(cert.names, vec!["example.com".to_string()]);
+        assert_eq!(cert.common_name.as_deref(), Some("rcgen self signed cert"));
     }
 
     #[test]

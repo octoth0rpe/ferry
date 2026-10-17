@@ -3,8 +3,8 @@
 # Everything is optional except at least one [[proxy]] section.
 # Relative paths are resolved against this file's directory.
 
-# Certificate chain and private key (PEM). Leave both out to use ferry's
-# self-signed certificate.
+# Certificate chain and private key (PEM). Leave both out to use a
+# certificate from ferry's local CA (see http://localhost:PORT/.ferry/).
 # cert = "/etc/letsencrypt/live/example.com/fullchain.pem"
 # key  = "/etc/letsencrypt/live/example.com/privkey.pem"
 
@@ -48,3 +48,6 @@ upstream = 6006            # or "10.0.0.5:6006", "http://app:8080", "/run/app.so
 # handshake_timeout = "15s"  # client TLS handshake and request headers
 # idle_timeout      = "90s"  # idle keep-alive connections
 # shutdown_grace    = "10s"  # in-flight requests on shutdown
+# qr_code           = true   # QR code in the banner for trusting the CA on a phone
+# ca_name_constraints = true # limit a new local CA to local names and private
+#                            # addresses (applies when the CA is created)

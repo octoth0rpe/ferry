@@ -23,7 +23,8 @@ pub struct CertKey {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
-    /// Certificate for listeners without their own; `None` means self-signed.
+    /// Certificate for listeners without their own; `None` means ferry's
+    /// local CA.
     pub cert_key: Option<CertKey>,
     pub listeners: Vec<Listener>,
     pub access_log: AccessLog,
@@ -82,6 +83,11 @@ pub struct Advanced {
     pub idle_timeout: Duration,
     /// How long in-flight requests get to finish on shutdown.
     pub shutdown_grace: Duration,
+    /// Show a QR code in the banner for trusting the local CA on a phone.
+    pub qr_code: bool,
+    /// Give a new local CA name constraints, so it can only vouch for local
+    /// names and private addresses.
+    pub ca_name_constraints: bool,
 }
 
 impl Default for Advanced {
@@ -91,6 +97,8 @@ impl Default for Advanced {
             handshake_timeout: Duration::from_secs(15),
             idle_timeout: Duration::from_secs(90),
             shutdown_grace: Duration::from_secs(10),
+            qr_code: true,
+            ca_name_constraints: true,
         }
     }
 }
@@ -114,7 +122,7 @@ impl Default for Config {
 }
 
 impl Listener {
-    /// The certificate this listener serves; `None` means self-signed.
+    /// The certificate this listener serves; `None` means ferry's local CA.
     pub fn cert_key<'a>(&'a self, config: &'a Config) -> Option<&'a CertKey> {
         self.cert_key.as_ref().or(config.cert_key.as_ref())
     }
@@ -259,6 +267,10 @@ impl Config {
             handshake_timeout: changed(self.advanced.handshake_timeout, defaults.handshake_timeout),
             idle_timeout: changed(self.advanced.idle_timeout, defaults.idle_timeout),
             shutdown_grace: changed(self.advanced.shutdown_grace, defaults.shutdown_grace),
+            qr_code: (self.advanced.qr_code != defaults.qr_code).then_some(self.advanced.qr_code),
+            ca_name_constraints: (self.advanced.ca_name_constraints
+                != defaults.ca_name_constraints)
+                .then_some(self.advanced.ca_name_constraints),
         };
         let out = OutConfig {
             cert,
@@ -364,6 +376,10 @@ struct OutAdvanced {
     idle_timeout: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     shutdown_grace: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    qr_code: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ca_name_constraints: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -400,6 +416,8 @@ struct FileAdvanced {
     handshake_timeout: Option<Spanned<toml::Value>>,
     idle_timeout: Option<Spanned<toml::Value>>,
     shutdown_grace: Option<Spanned<toml::Value>>,
+    qr_code: Option<bool>,
+    ca_name_constraints: Option<bool>,
 }
 
 /// Reads and validates a config file. Relative paths inside it are resolved
@@ -528,6 +546,10 @@ fn load_file(path: &Path) -> Result<Config, Vec<String>> {
             "shutdown_grace",
             defaults.shutdown_grace,
         ),
+        qr_code: adv.qr_code.unwrap_or(defaults.qr_code),
+        ca_name_constraints: adv
+            .ca_name_constraints
+            .unwrap_or(defaults.ca_name_constraints),
     };
 
     if errors.is_empty() {
@@ -783,6 +805,7 @@ idle_timeout = 30
         assert_eq!(c.advanced.connect_timeout, Duration::from_secs(2));
         assert_eq!(c.advanced.idle_timeout, Duration::from_secs(30));
         assert_eq!(c.advanced.handshake_timeout, Duration::from_secs(15));
+        assert!(c.advanced.qr_code && c.advanced.ca_name_constraints);
     }
 
     #[test]
@@ -903,6 +926,8 @@ key = "o.key"
 
 [advanced]
 idle_timeout = "2m"
+qr_code = false
+ca_name_constraints = false
 "#,
             &["127.0.0.1:8000:9000", "8001:app:80"],
         );
@@ -922,6 +947,8 @@ idle_timeout = "2m"
             "{printed}"
         );
         assert!(printed.contains("idle_timeout = \"2m\""), "{printed}");
+        assert!(printed.contains("qr_code = false"), "{printed}");
+        assert!(printed.contains("ca_name_constraints = false"), "{printed}");
         assert!(!printed.contains("connect_timeout"), "{printed}");
     }
 

@@ -88,6 +88,28 @@ pub fn local_ips() -> Vec<IpAddr> {
     ips
 }
 
+/// This machine's LAN addresses, the one on the default route first: that's
+/// the one other devices on the same network can most likely reach.
+pub fn lan_ips_best_first() -> Vec<IpAddr> {
+    let mut ips = local_ips();
+    if let Some(best) = default_route_ip()
+        && let Some(i) = ips.iter().position(|ip| *ip == best)
+    {
+        let best = ips.remove(i);
+        ips.insert(0, best);
+    }
+    ips
+}
+
+/// The local address of the default route. Connecting a UDP socket picks it
+/// without sending anything.
+fn default_route_ip() -> Option<IpAddr> {
+    let socket = std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
+    // TEST-NET-1: never a real host, but routed like one.
+    socket.connect((Ipv4Addr::new(192, 0, 2, 1), 9)).ok()?;
+    Some(socket.local_addr().ok()?.ip())
+}
+
 /// Shows IPv4 clients of a dual-stack socket as `1.2.3.4`, not `::ffff:1.2.3.4`.
 pub fn canonical(addr: SocketAddr) -> SocketAddr {
     SocketAddr::new(addr.ip().to_canonical(), addr.port())

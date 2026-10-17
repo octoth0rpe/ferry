@@ -16,7 +16,8 @@ Mappings (LISTEN:UPSTREAM):
   6005:/run/app.sock      forward to a Unix socket
   [::1]:6005:6006         IPv6 addresses go in brackets
 
-Without CERT and KEY, ferry uses a self-signed certificate.
+Without CERT and KEY, ferry issues a certificate from its own local CA.
+To trust the CA, open http://localhost:PORT/.ferry/ (plain HTTP).
 
 Examples:
   ferry 6005:6006
@@ -123,7 +124,7 @@ impl Cli {
             Err(files) if files.len() == 1 => {
                 return Err(format!(
                     "got one file (`{}`); give both CERT and KEY, \
-                     or neither to use a self-signed certificate",
+                     or neither to use ferry's local CA",
                     files[0].display()
                 ));
             }

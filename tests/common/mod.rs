@@ -160,7 +160,18 @@ impl Ferry {
     }
 
     pub fn spawn(args: &[&str]) -> Ferry {
-        let home = TempDir::new();
+        Ferry::spawn_in(TempDir::new(), args)
+    }
+
+    /// Starts ferry with an existing home directory, such as one from
+    /// [`Ferry::stop`].
+    pub fn start_in(home: TempDir, args: &[&str], wait_port: u16) -> Ferry {
+        let ferry = Ferry::spawn_in(home, args);
+        ferry.wait_for_port(wait_port);
+        ferry
+    }
+
+    pub fn spawn_in(home: TempDir, args: &[&str]) -> Ferry {
         let stderr_path = home.path("stderr.log");
         let stdout_path = home.path("stdout.log");
         let child = Command::new(env!("CARGO_BIN_EXE_ferry"))
@@ -190,6 +201,31 @@ impl Ferry {
             std::thread::sleep(Duration::from_millis(25));
         }
         panic!("ferry didn't start listening on {port}:\n{}", self.stderr());
+    }
+
+    /// Kills ferry and hands back its home directory.
+    pub fn stop(mut self) -> TempDir {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        std::mem::replace(&mut self.home, TempDir(PathBuf::new()))
+    }
+
+    /// ferry's data directory, where the local CA lives.
+    pub fn data_dir(&self) -> PathBuf {
+        data_dir(&self.home)
+    }
+
+    /// Waits until stderr contains `needle` (the banner is written after
+    /// ferry starts listening), then returns all of it.
+    pub fn wait_for_stderr(&self, needle: &str) -> String {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let err = self.stderr();
+            if err.contains(needle) || Instant::now() > deadline {
+                return err;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
     }
 
     pub fn stderr(&self) -> String {
@@ -242,6 +278,36 @@ pub fn run_ferry(args: &[&str]) -> (i32, String, String) {
         String::from_utf8_lossy(&out.stdout).into_owned(),
         String::from_utf8_lossy(&out.stderr).into_owned(),
     )
+}
+
+/// ferry's data directory under a test home directory.
+pub fn data_dir(home: &TempDir) -> PathBuf {
+    match cfg!(target_os = "macos") {
+        true => home.path("Library/Application Support/ferry"),
+        false => home.path("share/ferry"),
+    }
+}
+
+/// An HTTPS client that trusts only the CA certificate in `ca_pem`, and
+/// verifies certificates the way browsers do.
+pub fn ca_client(ca_pem: &Path) -> reqwest::Client {
+    use rustls::pki_types::pem::PemObject;
+    let mut roots = rustls::RootCertStore::empty();
+    for cert in CertificateDer::pem_file_iter(ca_pem).unwrap() {
+        roots.add(cert.unwrap()).unwrap();
+    }
+    let config = rustls::ClientConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .unwrap()
+    .with_root_certificates(roots)
+    .with_no_client_auth();
+    reqwest::Client::builder()
+        .tls_backend_preconfigured(config)
+        .no_proxy()
+        .build()
+        .unwrap()
 }
 
 #[derive(Debug)]

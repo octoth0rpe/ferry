@@ -24,8 +24,8 @@ ferry \- a very simple HTTPS reverse proxy
 .B ferry
 accepts HTTPS connections and forwards the requests over plain HTTP to an
 application on the same machine or elsewhere. It is meant to need no
-configuration for most uses: with no certificate it uses a self\-signed one
-it keeps between runs, it listens on IPv4 and IPv6, it redirects plain HTTP
+configuration for most uses: with no certificate it issues one from a local
+certificate authority it keeps between runs, it listens on IPv4 and IPv6, it redirects plain HTTP
 to HTTPS, and it passes WebSockets through.
 .PP
 Clients may use HTTP/2 or HTTP/1.1. Requests are forwarded to upstreams over
@@ -37,8 +37,7 @@ directions.
 A PEM certificate chain and its unencrypted PEM private key. The certificate
 file should contain the full chain (for Let's Encrypt,
 .IR fullchain.pem ).
-Give both or neither. Without them, ferry uses its self\-signed certificate;
-see
+Give both or neither. Without them, ferry uses its local CA; see
 .BR CERTIFICATES .
 .TP
 .I mapping
@@ -211,26 +210,70 @@ connect_timeout = "5s"            # connecting to an upstream
 handshake_timeout = "15s"         # TLS handshake and request headers
 idle_timeout = "90s"              # idle keep\-alive connections
 shutdown_grace = "10s"            # in\-flight requests on shutdown
+qr_code = true                    # QR code in the banner for phones
+ca_name_constraints = true        # limit a new local CA to local names
 .RE
 .fi
 .PP
 Durations accept ms, s, m and h suffixes or a plain number of seconds.
 .SH CERTIFICATES
-When no certificate is configured, ferry generates a self\-signed certificate
-on first use and stores it, with its key, in
+When no certificate is configured, ferry uses its own local certificate
+authority. The CA is created on first use and kept, with its key, in
 .I ~/Library/Application Support/ferry/
 on macOS and
 .I $XDG_DATA_HOME/ferry/
 (default
 .IR ~/.local/share/ferry/ )
-on Linux. It covers localhost, 127.0.0.1, ::1, the host name (and
+on Linux, as
+.I ca.pem
+and
+.IR ca\-key.pem .
+It is valid for 10 years. Trust it once on each device and every ferry on
+this machine works there without warnings.
+.PP
+The CA has name constraints: it can only vouch for localhost, names ending in
+.IR .local ,
+the host name it was created with, and loopback, private, link\-local and
+carrier\-grade NAT addresses. If its key leaked, it could not be used to
+impersonate other sites to devices that trust it (Android ignores name
+constraints). Names it cannot cover, such as a public LAN address, are left
+out of the server certificate with a warning. To make a CA without them, set
+.B ca_name_constraints = false
+in
+.B [advanced]
+and delete
+.I ca.pem
+and
+.IR ca\-key.pem ;
+the setting only applies when the CA is created.
+.PP
+On every start and reload ferry issues a new server certificate from the CA,
+written to
+.IR server.pem ,
+covering localhost, 127.0.0.1, ::1, the host name (and
 .IR hostname .local)
-and the machine's LAN IPv4 addresses, and is valid for 397 days. It is
-replaced when it is within 30 days of expiry or no longer covers the host
-name; a new IP address alone does not replace it, so trust given to it is
-kept. Browsers warn about it until it is trusted, for example on macOS with
-.BR security (1)
-.BR add\-trusted\-cert .
+and the machine's LAN IPv4 addresses. It is reissued while ferry runs when
+those change, for example when a laptop joins another network.
+.PP
+Plain HTTP requests for
+.I /.ferry/
+on a port that uses the CA get a page explaining how to trust it on iOS,
+Android and this machine, with the commands for the system store and for any
+Firefox (and, on Linux, Chrome) NSS databases found. The CA certificate
+itself is at
+.IR /.ferry/ca.crt .
+Over HTTPS these paths go to the application as usual. When stderr is a
+terminal, the banner shows the CA's SHA\-256 fingerprint and a QR code for
+the page at the machine's LAN address; set
+.B qr_code = false
+in
+.B [advanced]
+to leave it out.
+.PP
+A file named
+.I self\-signed.pem
+in the same directory is from ferry versions before the local CA and is no
+longer used.
 .PP
 ferry serves the same certificate whatever name the client asks for.
 .SH RELOADING
@@ -303,13 +346,13 @@ Any other value is ignored with a warning.
 If set, output is never coloured.
 .TP
 .BR HOME ", " XDG_DATA_HOME
-Where the self\-signed certificate is kept.
+Where the local CA is kept.
 .SH EXIT STATUS
 0 on a clean shutdown or a successful
 .BR \-t ;
 1 on errors in the configuration or at startup; 2 for invalid usage.
 .SH EXAMPLES
-HTTPS for a development server, with a self\-signed certificate:
+HTTPS for a development server, with a certificate from ferry's local CA:
 .PP
 .RS
 ferry 5173:5173

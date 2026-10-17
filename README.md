@@ -11,7 +11,14 @@ ferry 6005:6006
 ferry 0.1.0
   https://localhost:6005  →  http://localhost:6006
   https://192.168.1.20:6005
-  cert: self-signed (~/Library/Application Support/ferry/self-signed.pem)
+  cert: ferry local CA (~/Library/Application Support/ferry/ca.pem)
+  CA fingerprint (SHA-256):
+    03:0B:A0:99:DC:39:A1:83:8F:C7:78:3B:B2:1A:DB:BB
+    62:15:FB:C0:95:2B:0B:AF:8F:B7:F8:67:E0:EC:72:DA
+  browsers warn until you trust the CA; see http://localhost:6005/.ferry/
+  on a phone, scan this to trust the CA (on an iPhone, open it in Safari):
+  (QR code)
+  http://192.168.1.20:6005/.ferry/
 ```
 
 **HTTPS for development, with a path to production.** ferry gives your dev
@@ -27,10 +34,13 @@ dependencies.
 ferry does one job, and its defaults are chosen so you rarely need to
 configure anything:
 
-- **No certificate needed.** Without one, ferry makes a self-signed
-  certificate covering `localhost`, your hostname and your LAN addresses. It
-  keeps that certificate between runs, so once you've trusted it, it stays
-  trusted.
+- **No certificate needed.** Without one, ferry issues one from its own local
+  certificate authority, covering `localhost`, your hostname and your LAN
+  addresses. Trust the CA once and it stays trusted, even as your addresses
+  change.
+- **Test on your phone.** Scan the QR code in the banner and ferry walks you
+  through trusting its CA on iOS or Android, so service workers and PWAs
+  work on a real device.
 - **HTTP/2 and HTTP/1.1** to clients, negotiated automatically.
 - **WebSockets just work**, so dev-server hot reload (Vite, Next.js, …) works
   through ferry.
@@ -69,7 +79,7 @@ Or run `cargo build --release`; the binary is at `target/release/ferry`.
 ## Quick start
 
 ```sh
-# HTTPS on 6005 for an app on 6006, with a self-signed certificate
+# HTTPS on 6005 for an app on 6006, with a certificate from ferry's local CA
 ferry 6005:6006
 
 # Your own certificate, several apps at once
@@ -124,32 +134,77 @@ When the certificate or key files change, ferry loads them automatically, so
 renewals by certbot or similar tools need no restart. Each listener in a
 config file can have its own `cert` and `key`.
 
-### The self-signed default
+### The local CA
 
-With no certificate configured, ferry generates one the first time and keeps
-it at:
+With no certificate configured, ferry creates its own certificate authority
+the first time and keeps it, with its key, at:
 
-- macOS: `~/Library/Application Support/ferry/self-signed.pem`
-- Linux: `~/.local/share/ferry/self-signed.pem` (or `$XDG_DATA_HOME/ferry/`)
+- macOS: `~/Library/Application Support/ferry/ca.pem`
+- Linux: `~/.local/share/ferry/ca.pem` (or `$XDG_DATA_HOME/ferry/`)
 
-It covers `localhost`, `127.0.0.1`, `::1`, your hostname (and
-`hostname.local`), and the machine's LAN IPv4 addresses. It's valid for 397
-days. ferry replaces it when it's within 30 days of expiry, or when the
-hostname changes. A new LAN address alone doesn't trigger a new certificate,
-because that would undo trust you've already given the old one.
+The CA is valid for 10 years. It has *name constraints*: it can only vouch
+for `localhost`, names ending in `.local`, the hostname it was made with, and
+loopback and private addresses. A trusted CA can otherwise vouch for any
+site, so this limits the damage if its key ever leaks (Android ignores name
+constraints, so there the protection doesn't apply). If your machine has an
+address the CA can't cover, such as a public IP, ferry leaves it out of the
+certificate and says so. If you need a CA without constraints, set
+`ca_name_constraints = false` under `[advanced]` and delete `ca.pem` and
+`ca-key.pem`; the setting only applies when the CA is created.
 
-Browsers warn about a self-signed certificate until you trust it. To trust
-it:
+On every start, ferry issues a new server
+certificate from it (`server.pem` in the same directory) covering
+`localhost`, `127.0.0.1`, `::1`, your hostname (and `hostname.local`), and the
+machine's LAN IPv4 addresses. While it runs, it issues another when those
+change, such as when your laptop joins another network. Nothing trusts the
+server certificate directly, so replacing it costs nothing.
+
+Browsers warn until you trust the CA. Open `http://localhost:PORT/.ferry/`,
+over plain HTTP, on any port that uses it. The page has the commands for
+this machine, filled in with the real paths:
 
 ```sh
 # macOS
 security add-trusted-cert -r trustRoot -k ~/Library/Keychains/login.keychain-db \
-  ~/"Library/Application Support/ferry/self-signed.pem"
+  ~/"Library/Application Support/ferry/ca.pem"
 
-# Debian/Ubuntu (system-wide; Firefox and Chrome on Linux may use their own store)
-sudo cp ~/.local/share/ferry/self-signed.pem /usr/local/share/ca-certificates/ferry.crt
+# Debian/Ubuntu
+sudo cp ~/.local/share/ferry/ca.pem /usr/local/share/ca-certificates/ferry.crt
 sudo update-ca-certificates
+
+# Fedora, Arch, openSUSE
+sudo trust anchor --store ~/.local/share/ferry/ca.pem
 ```
+
+Firefox, and Chrome on Linux, keep their own certificate stores (NSS). The
+page lists a `certutil` command for each one ferry finds. On macOS you can
+instead set `security.enterprise_roots.enabled` to `true` in Firefox's
+`about:config`, so it uses the keychain.
+
+**Phones.** When stderr is a terminal, the banner shows a QR code for
+`http://<your LAN address>:PORT/.ferry/`. Scan it and follow the steps for
+your phone:
+
+- **iPhone and iPad:** open the page in Safari (only Safari can install
+  profiles), download the certificate, install the profile from Settings,
+  then turn on full trust under Settings → General → About → Certificate Trust
+  Settings.
+- **Android:** download the certificate, then install it from Settings →
+  Security → Encryption & credentials → Install a certificate → CA
+  certificate. Android then shows "Network may be monitored"; that's expected.
+
+The page comes over plain HTTP, so check the fingerprint on it matches the one
+in ferry's banner. Over HTTPS, `/.ferry/` goes to your app like any other
+path. To leave the QR code out of the banner, set `qr_code = false` under
+`[advanced]`.
+
+Keep `ca-key.pem` private all the same: anyone with it could impersonate your
+local sites to devices that trust your CA.
+
+**Upgrading from the self-signed certificate.** Earlier versions of ferry
+used a self-signed certificate (`self-signed.pem`). It's no longer used:
+trust the CA once instead, and remove the old certificate from your trust
+store if you added it.
 
 ## Config file
 
@@ -311,7 +366,7 @@ Restart=on-failure
 User=ferry
 # Bind ports 80 and 443 without running as root.
 AmbientCapabilities=CAP_NET_BIND_SERVICE
-# Somewhere to keep the self-signed certificate, if you use it.
+# Somewhere to keep ferry's local CA, if you use it.
 StateDirectory=ferry
 Environment=XDG_DATA_HOME=/var/lib
 
@@ -348,7 +403,7 @@ Load it with `launchctl load ~/Library/LaunchAgents/local.ferry.plist`.
 |----------------------------------|----------------------------------------|-----------------------------------------------|
 | Bind address                     | all interfaces, IPv4 + IPv6            | `ADDR:PORT:UPSTREAM`, `listen = "ADDR:PORT"`  |
 | Upstream host                    | `localhost` (`::1` and `127.0.0.1`)    | `PORT:HOST:PORT`                              |
-| Certificate                      | self-signed, kept between runs         | `CERT KEY`, `cert`/`key`                      |
+| Certificate                      | issued from ferry's local CA           | `CERT KEY`, `cert`/`key`                      |
 | HTTP → HTTPS redirect            | on                                     | `--no-redirect`, `redirect = false`           |
 | Body size limit                  | none                                   | `--max-body`, `max_body`                      |
 | Access log                       | stdout, `combined`                     | `--access-log`, `--log-format`, `-q`          |
@@ -357,6 +412,8 @@ Load it with `launchctl load ~/Library/LaunchAgents/local.ferry.plist`.
 | TLS handshake + request headers  | 15s                                    | `[advanced] handshake_timeout`                |
 | Idle connections                 | 90s                                    | `[advanced] idle_timeout`                     |
 | Shutdown grace period            | 10s                                    | `[advanced] shutdown_grace`                   |
+| QR code for phones in the banner | on, when stderr is a terminal          | `[advanced] qr_code`                          |
+| Local CA name constraints        | on (local names, private addresses)    | `[advanced] ca_name_constraints`              |
 
 ## Shell completions and man page
 

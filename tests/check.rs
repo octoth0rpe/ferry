@@ -34,10 +34,10 @@ fn valid_config_passes() {
 }
 
 #[test]
-fn self_signed_is_noted_not_generated() {
+fn local_ca_is_noted_not_created() {
     let (code, _, err) = run_ferry(&["-t", &format!("{}:6006", free_port())]);
     assert_eq!(code, 0, "{err}");
-    assert!(err.contains("will generate a self-signed one at"), "{err}");
+    assert!(err.contains("will create ferry's local CA at"), "{err}");
 }
 
 #[test]

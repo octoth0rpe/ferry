@@ -5,14 +5,17 @@ use std::io::IsTerminal;
 use std::net::IpAddr;
 use std::path::Path;
 
-use crate::config::{Config, ErrorLog};
-use crate::dirs;
-use crate::mapping::Upstream;
-use crate::net;
-use crate::server::Plan;
+use qrcodegen::{QrCode, QrCodeEcc};
 
-/// Builds the banner text. `color` adds bold/dim ANSI styling.
-pub fn render(config: &Config, plan: &Plan, color: bool) -> String {
+use crate::ca::LocalCa;
+use crate::config::{Config, ErrorLog};
+use crate::mapping::Upstream;
+use crate::server::Plan;
+use crate::{dirs, net, trust};
+
+/// Builds the banner text. `color` adds bold/dim ANSI styling; `qr` shows a
+/// QR code for trusting the local CA on a phone.
+pub fn render(config: &Config, plan: &Plan, color: bool, qr: bool) -> String {
     let (bold, dim, reset) = match color {
         true => ("\x1b[1m", "\x1b[2m", "\x1b[0m"),
         false => ("", "", ""),
@@ -45,9 +48,9 @@ pub fn render(config: &Config, plan: &Plan, color: bool) -> String {
         .iter()
         .map(|l| match l.cert_key(config) {
             Some(ck) => tilde(&ck.cert),
-            None => match &plan.self_signed {
-                Some(ss) => format!("self-signed ({})", tilde(&ss.paths.cert)),
-                None => "self-signed".into(),
+            None => match &plan.local_ca {
+                Some(ca) => format!("ferry local CA ({})", tilde(&ca.paths.root.cert)),
+                None => "ferry local CA".into(),
             },
         })
         .collect();
@@ -55,13 +58,118 @@ pub fn render(config: &Config, plan: &Plan, color: bool) -> String {
     for cert in certs {
         let _ = writeln!(out, "  {dim}cert: {cert}{reset}");
     }
-    if plan.self_signed.is_some() {
-        let _ = writeln!(
-            out,
-            "  {dim}browsers will warn about the self-signed cert until you trust it{reset}"
-        );
+    if let Some(ca) = &plan.local_ca {
+        out.push_str(&trust_section(config, ca, color, qr));
     }
     out
+}
+
+/// How to trust the local CA: its fingerprint, the `/.ferry/` page for this
+/// computer, and a QR code for phones.
+fn trust_section(config: &Config, ca: &LocalCa, color: bool, qr: bool) -> String {
+    let (bold, dim, reset) = match color {
+        true => ("\x1b[1m", "\x1b[2m", "\x1b[0m"),
+        false => ("", "", ""),
+    };
+    let mut out = String::new();
+    if ca.created.is_some() && ca.paths.old_self_signed.exists() {
+        let _ = writeln!(
+            out,
+            "  {bold}ferry now uses a local CA instead of a self-signed certificate. Trust it \
+             once, below;{reset}\n  {bold}{} is no longer used.{reset}",
+            tilde(&ca.paths.old_self_signed)
+        );
+    }
+    let [fp1, fp2] = trust::fingerprint_lines(&ca.fingerprint);
+    let _ = writeln!(out, "  {dim}CA fingerprint (SHA-256):{reset}");
+    let _ = writeln!(out, "  {dim}  {fp1}{reset}");
+    let _ = writeln!(out, "  {dim}  {fp2}{reset}");
+
+    // Plain HTTP on a port that uses the CA serves the page; pick ports that
+    // accept loopback and LAN connections respectively.
+    let ca_ports = config
+        .listeners
+        .iter()
+        .filter(|l| l.cert_key(config).is_none())
+        .map(|l| (l.mapping.bind, l.mapping.port));
+    let page = |host: &str, port: u16| {
+        let port = match port {
+            80 => String::new(),
+            p => format!(":{p}"),
+        };
+        format!("http://{host}{port}{}", trust::PATH)
+    };
+    let all = |bind: Option<IpAddr>| bind.is_none_or(|ip| ip.is_unspecified());
+    if let Some((_, port)) = ca_ports
+        .clone()
+        .find(|(bind, _)| all(*bind) || bind.is_some_and(|ip| ip.is_loopback()))
+    {
+        let _ = writeln!(
+            out,
+            "  {dim}browsers warn until you trust the CA; see {}{reset}",
+            page("localhost", port)
+        );
+    }
+
+    let lan_ips = net::lan_ips_best_first();
+    let lan_pages: Vec<String> = lan_ips
+        .iter()
+        .filter(|ip| ip.is_ipv4())
+        .filter_map(|ip| {
+            let (_, port) = ca_ports
+                .clone()
+                .find(|(bind, _)| all(*bind) || *bind == Some(*ip))?;
+            Some(page(&ip.to_string(), port))
+        })
+        .collect();
+    if let Some((first, rest)) = lan_pages.split_first() {
+        if qr {
+            let _ = writeln!(
+                out,
+                "  on a phone, scan this to trust the CA (on an iPhone, open it in Safari):"
+            );
+            for line in qr_code(first, color) {
+                let _ = writeln!(out, "  {line}");
+            }
+            let _ = writeln!(out, "  {first}");
+        } else {
+            let _ = writeln!(out, "  {dim}on a phone: {first}{reset}");
+        }
+        for page in rest {
+            let _ = writeln!(out, "  {dim}  or {page}{reset}");
+        }
+    }
+    out
+}
+
+/// A QR code drawn with half blocks, two rows of modules to a line. With
+/// `color`, it's black on white whatever the terminal's colours; without, it
+/// assumes light text on a dark background and draws the light modules.
+fn qr_code(text: &str, color: bool) -> Vec<String> {
+    let Ok(code) = QrCode::encode_text(text, QrCodeEcc::Low) else {
+        return Vec::new();
+    };
+    // Scanners need a light border; two modules is enough in practice.
+    let border = 2;
+    let (start, end) = (-border, code.size() + border);
+    let ink = |x, y| code.get_module(x, y) == color;
+    (start..end)
+        .step_by(2)
+        .map(|y| {
+            let row: String = (start..end)
+                .map(|x| match (ink(x, y), y + 1 < end && ink(x, y + 1)) {
+                    (true, true) => '█',
+                    (true, false) => '▀',
+                    (false, true) => '▄',
+                    (false, false) => ' ',
+                })
+                .collect();
+            match color {
+                true => format!("\x1b[30;107m{row}\x1b[0m"),
+                false => row,
+            }
+        })
+        .collect()
 }
 
 /// The URLs a listener can be reached at, best first.
@@ -95,12 +203,15 @@ fn tilde(path: &Path) -> String {
 }
 
 /// Prints the banner to stderr unless `-q`, and logs the listeners to the
-/// error log when it isn't the terminal (so log files record them too).
-pub fn show(config: &Config, plan: &Plan) {
+/// error log when it isn't the terminal (so log files record them too). The
+/// QR code is only for people watching a terminal, not for background mode.
+pub fn show(config: &Config, plan: &Plan, daemonize: bool) {
     let stderr_is_log = config.error_log == ErrorLog::Stderr;
     if !config.quiet {
-        let color = std::io::stderr().is_terminal() && std::env::var_os("NO_COLOR").is_none();
-        eprint!("{}", render(config, plan, color));
+        let tty = std::io::stderr().is_terminal();
+        let color = tty && std::env::var_os("NO_COLOR").is_none();
+        let qr = tty && !daemonize && config.advanced.qr_code;
+        eprint!("{}", render(config, plan, color, qr));
     }
     if config.quiet || !stderr_is_log {
         for l in &config.listeners {
