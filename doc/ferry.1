@@ -277,14 +277,15 @@ covering localhost, 127.0.0.1, ::1, the host name (and
 and the machine's LAN IPv4 addresses. It is reissued while ferry runs when
 those change, for example when a laptop joins another network.
 .PP
-Plain HTTP requests for
-.I /.ferry/
-on a port that uses the CA get a page explaining how to trust it on iOS,
-Android and this machine, with the commands for the system store and for any
-Firefox (and, on Linux, Chrome) NSS databases found. The CA certificate
+ferry serves a page explaining how to trust the CA on iOS, Android and this
+machine, with the commands for the system store and for any Firefox (and, on
+Linux, Chrome) NSS databases found. It is plain HTTP on a port of its own,
+chosen by the system and kept across reloads, so nothing of ferry's appears
+at the applications' addresses; the banner links to it. The CA certificate
 itself is at
-.IR /.ferry/ca.crt .
-Over HTTPS these paths go to the application as usual. When stderr is a
+.I /ca.crt
+on that port. If every listener using the CA is bound to loopback, so is the
+page. When stderr is a
 terminal, the banner shows the CA's SHA\-256 fingerprint, a QR code for the
 page at the machine's LAN address with the steps beside it, and a QR code
 for each application; set

@@ -10,7 +10,7 @@ use qrcodegen::{QrCode, QrCodeEcc};
 use crate::ca::LocalCa;
 use crate::config::{Config, ErrorLog};
 use crate::mapping::Upstream;
-use crate::server::Plan;
+use crate::server::{Kind, Plan};
 use crate::{dirs, net, trust};
 
 /// Builds the banner text. `color` adds bold/dim ANSI styling; `qr` shows QR
@@ -35,7 +35,7 @@ pub fn render(config: &Config, plan: &Plan, color: bool, qr: bool) -> String {
             let _ = writeln!(out, "  {dim}{url}{reset}");
         }
     }
-    for spec in plan.listeners.iter().filter(|s| s.optional) {
+    for spec in plan.listeners.iter().filter(|s| s.kind == Kind::Redirect) {
         let _ = writeln!(
             out,
             "  {dim}http://*:{} redirects to https{reset}",
@@ -59,14 +59,14 @@ pub fn render(config: &Config, plan: &Plan, color: bool, qr: bool) -> String {
         let _ = writeln!(out, "  {dim}cert: {cert}{reset}");
     }
     if let Some(ca) = &plan.local_ca {
-        out.push_str(&trust_section(config, ca, color));
+        out.push_str(&trust_section(plan, ca, color));
     }
     out.push_str(&phone_section(config, plan, color, qr));
     out
 }
 
 /// The local CA's fingerprint, and where to trust it on this computer.
-fn trust_section(config: &Config, ca: &LocalCa, color: bool) -> String {
+fn trust_section(plan: &Plan, ca: &LocalCa, color: bool) -> String {
     let (bold, dim, reset) = match color {
         true => ("\x1b[1m", "\x1b[2m", "\x1b[0m"),
         false => ("", "", ""),
@@ -84,7 +84,7 @@ fn trust_section(config: &Config, ca: &LocalCa, color: bool) -> String {
     let _ = writeln!(out, "  {dim}CA fingerprint (SHA-256):{reset}");
     let _ = writeln!(out, "  {dim}  {fp1}{reset}");
     let _ = writeln!(out, "  {dim}  {fp2}{reset}");
-    if let Some(port) = ca_port(config, |ip| ip.is_loopback()) {
+    if let Some((port, _)) = trust_listener(plan) {
         let _ = writeln!(
             out,
             "  {dim}browsers warn until you trust the CA; see {}{reset}",
@@ -94,7 +94,7 @@ fn trust_section(config: &Config, ca: &LocalCa, color: bool) -> String {
     out
 }
 
-/// What a phone on the same network needs: the `/.ferry/` page for trusting
+/// What a phone on the same network needs: the page for trusting
 /// the local CA, with the steps in brief, and each app's address. With `qr`,
 /// as QR codes side by side.
 fn phone_section(config: &Config, plan: &Plan, color: bool, qr: bool) -> String {
@@ -109,11 +109,9 @@ fn phone_section(config: &Config, plan: &Plan, color: bool, qr: bool) -> String 
         return String::new();
     };
     let reachable = |bind: Option<IpAddr>| all_interfaces(bind) || bind == Some(ip);
-    let trust = plan
-        .local_ca
-        .as_ref()
-        .and_then(|_| ca_port(config, |bind| bind == ip))
-        .map(|port| trust_page(&ip.to_string(), port));
+    let trust = trust_listener(plan)
+        .filter(|(_, lan)| *lan)
+        .map(|(port, _)| trust_page(&ip.to_string(), port));
 
     let mut out = String::new();
     if !qr {
@@ -208,26 +206,18 @@ fn all_interfaces(bind: Option<IpAddr>) -> bool {
     bind.is_none_or(|ip| ip.is_unspecified())
 }
 
-/// The first port that uses the local CA and accepts connections on an
-/// address `bind` matches (or on all of them).
-fn ca_port(config: &Config, matches: impl Fn(IpAddr) -> bool) -> Option<u16> {
-    config
-        .listeners
-        .iter()
-        .filter(|l| l.cert_key(config).is_none())
-        .find(|l| all_interfaces(l.mapping.bind) || l.mapping.bind.is_some_and(&matches))
-        .map(|l| l.mapping.port)
+/// Where the page for trusting the local CA is, if it's being served: its
+/// port, and whether other devices can reach it.
+fn trust_listener(plan: &Plan) -> Option<(u16, bool)> {
+    let spec = plan.listeners.iter().find(|s| s.kind == Kind::Trust)?;
+    Some((plan.trust_port?, all_interfaces(spec.key.0)))
 }
 
 fn trust_page(host: &str, port: u16) -> String {
-    let port = match port {
-        80 => String::new(),
-        p => format!(":{p}"),
-    };
-    format!("http://{host}{port}{}", trust::PATH)
+    format!("http://{host}:{port}/")
 }
 
-/// The `/.ferry/` page's steps in brief, for people looking at the terminal
+/// The trust page's steps in brief, for people looking at the terminal
 /// rather than the phone. Narrow, to fit beside the QR code.
 const PHONE_STEPS: [&str; 13] = [
     "Trust ferry's CA, once per phone:",

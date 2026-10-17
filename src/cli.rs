@@ -17,7 +17,7 @@ Mappings (LISTEN:UPSTREAM):
   [::1]:6005:6006         IPv6 addresses go in brackets
 
 Without CERT and KEY, ferry issues a certificate from its own local CA.
-To trust the CA, open http://localhost:PORT/.ferry/ (plain HTTP).
+The banner links to a page about trusting the CA.
 
 Everything after -- is a command to run alongside ferry, such as your dev
 server. ferry holds requests until it's listening, then shows its banner,

@@ -15,11 +15,11 @@ ferry 0.1.0
   CA fingerprint (SHA-256):
     03:0B:A0:99:DC:39:A1:83:8F:C7:78:3B:B2:1A:DB:BB
     62:15:FB:C0:95:2B:0B:AF:8F:B7:F8:67:E0:EC:72:DA
-  browsers warn until you trust the CA; see http://localhost:6005/.ferry/
+  browsers warn until you trust the CA; see http://localhost:52814/
   on a phone, scan this first:          Trust ferry's CA, once per phone:
   (QR code)                             iPhone
                                          • Open the page in Safari and ...
-  http://192.168.1.20:6005/.ferry/
+  http://192.168.1.20:52814/
   then open the app on :6005:
   (QR code)
   https://192.168.1.20:6005/
@@ -190,9 +190,10 @@ machine's LAN IPv4 addresses. While it runs, it issues another when those
 change, such as when your laptop joins another network. Nothing trusts the
 server certificate directly, so replacing it costs nothing.
 
-Browsers warn until you trust the CA. Open `http://localhost:PORT/.ferry/`,
-over plain HTTP, on any port that uses it. The page has the commands for
-this machine, filled in with the real paths:
+Browsers warn until you trust the CA. ferry serves a page about trusting it
+over plain HTTP, on a port of its own that the system picks, so it never
+appears at your apps' addresses; the banner links to it. The page has the
+commands for this machine, filled in with the real paths:
 
 ```sh
 # macOS
@@ -212,9 +213,9 @@ page lists a `certutil` command for each one ferry finds. On macOS you can
 instead set `security.enterprise_roots.enabled` to `true` in Firefox's
 `about:config`, so it uses the keychain.
 
-**Phones.** When stderr is a terminal, the banner shows a QR code for
-`http://<your LAN address>:PORT/.ferry/`, with the steps beside it, and below
-that a QR code for each app. Scan the first and follow the steps for your
+**Phones.** When stderr is a terminal, the banner shows a QR code for that
+page at your LAN address, with the steps beside it, and below that a QR code
+for each app. Scan the first and follow the steps for your
 phone:
 
 - **iPhone and iPad:** open the page in Safari (only Safari can install
@@ -227,8 +228,8 @@ phone:
   certificate. Android then shows "Network may be monitored"; that's expected.
 
 The page comes over plain HTTP, so check the fingerprint on it matches the one
-in ferry's banner. Over HTTPS, `/.ferry/` goes to your app like any other
-path. To leave the QR codes out of the banner, set `qr_code = false` under
+in ferry's banner. If every app that uses the CA listens on loopback only,
+so phones couldn't reach it anyway, the page does too. To leave the QR codes out of the banner, set `qr_code = false` under
 `[advanced]`.
 
 Keep `ca-key.pem` private all the same: anyone with it could impersonate your

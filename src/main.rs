@@ -95,6 +95,14 @@ fn main() -> ExitCode {
         }
         Err(errors) => return fail(errors),
     };
+    let mut plan = plan;
+    plan.trust_port = plan
+        .listeners
+        .iter()
+        .find(|s| s.kind == server::Kind::Trust)
+        .and_then(|s| sockets.get(&s.key))
+        .and_then(|socket| socket.local_addr().ok())
+        .map(|addr| addr.port());
 
     let pid_path = config.pid_file.clone();
     if let Some(path) = &pid_path

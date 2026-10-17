@@ -52,8 +52,10 @@ enable it once per clone with `git config core.hooksPath .githooks` (needs
   every upstream accepts connections, forwards SIGTERM (SIGINT only when not
   from the terminal), exits with its status. The banner is printed once the
   upstreams are up.
-- `trust.rs`: the `/.ferry/` page served over plain HTTP on CA ports (the
-  root, per-platform trust steps, desktop and NSS `certutil` commands).
+- `trust.rs`: the trust page, plain HTTP on its own OS-picked port (a
+  `Kind::Trust` listener keyed `(bind, 0)`, so reloads keep it) when the
+  local CA is used; never on app ports. It serves the root, per-platform
+  trust steps, and desktop and NSS `certutil` commands.
 - `der.rs`: the few certificate fields ferry reads (notAfter, issuer ==
   subject, subject CN, SAN names). Not a general X.509 parser.
 - `log.rs`: access log (written when the response body finishes) and error

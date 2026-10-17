@@ -1,15 +1,15 @@
-//! The `/.ferry/` page: ferry's local CA certificate and how to trust it on
-//! each platform.
+//! The page for trusting ferry's local CA: the certificate, and how to trust
+//! it on each platform.
 //!
-//! It's served over plain HTTP on ports that use the local CA, because a
-//! device that doesn't trust the CA yet can't fetch anything over HTTPS
-//! without a warning. Over HTTPS the same paths go to the app as usual, so
-//! ferry never takes a path away from it.
+//! It has a plain HTTP port of its own, picked by the OS: plain HTTP because
+//! a device that doesn't trust the CA yet can't fetch anything over HTTPS
+//! without a warning, and its own port so ferry never serves anything of its
+//! own at an app's address.
 
 use std::path::PathBuf;
 
 use bytes::Bytes;
-use http::header::{CONTENT_DISPOSITION, CONTENT_TYPE, LOCATION};
+use http::header::{ALLOW, CONTENT_DISPOSITION, CONTENT_TYPE};
 use http::{HeaderValue, Method, Request, Response, StatusCode};
 use http_body_util::{BodyExt, Full};
 
@@ -17,9 +17,6 @@ use crate::ca::LocalCa;
 use crate::dirs;
 use crate::proxy::{error_page, escape_html};
 use crate::upstream::Body;
-
-/// Where the page is served.
-pub const PATH: &str = "/.ferry/";
 
 /// The page and certificate, rendered once per configuration.
 pub struct Page {
@@ -35,11 +32,17 @@ impl Page {
         }
     }
 
-    /// Answers a plain HTTP request for one of ferry's paths, or `None` to
-    /// let the request through.
-    pub fn respond<B>(&self, req: &Request<B>) -> Option<Response<Body>> {
+    /// Answers a request to the page's port.
+    pub fn respond<B>(&self, req: &Request<B>) -> Response<Body> {
         if req.method() != Method::GET && req.method() != Method::HEAD {
-            return None;
+            let mut resp = error_page(
+                StatusCode::METHOD_NOT_ALLOWED,
+                "Only GET is allowed.",
+                false,
+            );
+            resp.headers_mut()
+                .insert(ALLOW, HeaderValue::from_static("GET, HEAD"));
+            return resp;
         }
         let html = |body: &Bytes| response(body.clone(), "text/html; charset=utf-8");
         let cert = |attachment: bool| {
@@ -54,20 +57,12 @@ impl Page {
             }
             resp
         };
-        Some(match req.uri().path() {
-            "/.ferry" => {
-                let mut resp =
-                    error_page(StatusCode::PERMANENT_REDIRECT, "Moved to /.ferry/", false);
-                resp.headers_mut()
-                    .insert(LOCATION, HeaderValue::from_static(PATH));
-                resp
-            }
-            PATH => html(&self.html),
-            "/.ferry/ca.crt" => cert(false),
-            "/.ferry/ferry-ca.crt" => cert(true),
-            path if path.starts_with(PATH) => error_page(StatusCode::NOT_FOUND, "Not found.", true),
-            _ => return None,
-        })
+        match req.uri().path() {
+            "/" => html(&self.html),
+            "/ca.crt" => cert(false),
+            "/ferry-ca.crt" => cert(true),
+            _ => error_page(StatusCode::NOT_FOUND, "Not found.", true),
+        }
     }
 }
 
@@ -224,7 +219,7 @@ have swapped the certificate.</p>
 <ol>
 <li>Open this page in <b>Safari</b>. Other browsers can't install
 certificates.</li>
-<li><a class=button href="/.ferry/ca.crt">Download the certificate</a>, then
+<li><a class=button href="/ca.crt">Download the certificate</a>, then
 tap <b>Allow</b>.</li>
 <li>Open <b>Settings → General → VPN &amp; Device Management</b>, tap
 <b>{name}</b> under Downloaded Profile, then <b>Install</b>. Do this within
@@ -235,7 +230,7 @@ turn on <b>{name}</b>.</li>
 
 <h2>Android</h2>
 <ol>
-<li><a class=button href="/.ferry/ferry-ca.crt">Download the certificate</a>.</li>
+<li><a class=button href="/ferry-ca.crt">Download the certificate</a>.</li>
 <li>Open <b>Settings</b> and search for <b>CA certificate</b> (usually under
 Security → Encryption &amp; credentials → Install a certificate).</li>
 <li>Tap <b>Install anyway</b> and pick <b>ferry-ca.crt</b> from Downloads.</li>

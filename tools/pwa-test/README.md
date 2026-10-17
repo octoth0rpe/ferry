@@ -36,7 +36,7 @@ Also worth checking each time:
   Settings → General → VPN & Device Management, and after installing it, does
   the CA show up in Certificate Trust Settings? Does the fingerprint under Settings → General →
   VPN & Device Management → the profile → More Details match the banner?
-- **Android:** does `/.ferry/ferry-ca.crt` land in Downloads, and can it be
+- **Android:** does `ferry-ca.crt` land in Downloads, and can it be
   installed from Settings → CA certificate?
 - Both `https://<lan-ip>:6005/` and `https://<hostname>.local:6005/` should
   load without a warning.

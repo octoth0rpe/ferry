@@ -43,23 +43,32 @@ async fn default_certificate_chains_to_the_local_ca() {
     assert!(err.contains("cert: ferry local CA ("), "{err}");
 }
 
+/// The trust page's address on this machine, from the banner.
+fn trust_url(ferry: &Ferry) -> String {
+    let err = ferry.wait_for_stderr("browsers warn until you trust the CA");
+    let start = err
+        .find("see http://localhost:")
+        .unwrap_or_else(|| panic!("{err}"))
+        + 4;
+    let url = &err[start..];
+    url[..url.find(char::is_whitespace).unwrap()].to_string()
+}
+
 #[tokio::test]
-async fn plain_http_serves_the_trust_page_and_certificate() {
+async fn the_trust_page_has_a_port_of_its_own() {
     let up = tcp_upstream("127.0.0.1:0").await;
     let port = free_port();
     let ferry = Ferry::start(&[&format!("{port}:{up}")], port);
     let der = root_der(&ferry);
     let fp = fingerprint(&der);
+    let page = trust_url(&ferry);
+    assert!(!page.contains(&format!(":{port}/")), "{page}");
     let http = plain_client();
 
-    let page = http
-        .get(format!("http://localhost:{port}/.ferry/"))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(page.status(), 200);
-    assert_eq!(page.headers()["content-type"], "text/html; charset=utf-8");
-    let html = page.text().await.unwrap();
+    let resp = http.get(&page).send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.headers()["content-type"], "text/html; charset=utf-8");
+    let html = resp.text().await.unwrap();
     assert!(
         html.contains(&fp[..47]) && html.contains(&fp[48..]),
         "{html}"
@@ -67,11 +76,7 @@ async fn plain_http_serves_the_trust_page_and_certificate() {
     assert!(html.contains("Certificate Trust Settings"), "{html}");
 
     for (path, attachment) in [("ca.crt", false), ("ferry-ca.crt", true)] {
-        let resp = http
-            .get(format!("http://localhost:{port}/.ferry/{path}"))
-            .send()
-            .await
-            .unwrap();
+        let resp = http.get(format!("{page}{path}")).send().await.unwrap();
         assert_eq!(resp.status(), 200);
         assert_eq!(resp.headers()["content-type"], "application/x-x509-ca-cert");
         assert_eq!(
@@ -80,35 +85,27 @@ async fn plain_http_serves_the_trust_page_and_certificate() {
         );
         assert_eq!(resp.bytes().await.unwrap().to_vec(), der);
     }
-
-    // The banner shows the same fingerprint, and where to find the page.
-    let err = ferry.wait_for_stderr("browsers warn until you trust the CA");
-    assert!(err.contains(&fp[..47]), "{err}");
-    assert!(
-        err.contains(&format!("see http://localhost:{port}/.ferry/")),
-        "{err}"
-    );
-
-    // Everything else is redirected as before.
-    let resp = http
-        .get(format!("http://localhost:{port}/.ferry/other"))
-        .send()
-        .await
-        .unwrap();
+    let resp = http.get(format!("{page}other")).send().await.unwrap();
     assert_eq!(resp.status(), 404);
-    let resp = http
-        .get(format!("http://localhost:{port}/app"))
+    let resp = http.post(&page).send().await.unwrap();
+    assert_eq!(resp.status(), 405);
+
+    // The banner shows the same fingerprint.
+    assert!(ferry.stderr().contains(&fp[..47]), "{}", ferry.stderr());
+}
+
+#[tokio::test]
+async fn app_ports_are_left_to_the_app() {
+    let up = tcp_upstream("127.0.0.1:0").await;
+    let port = free_port();
+    let _ferry = Ferry::start(&[&format!("{port}:{up}")], port);
+    // Plain HTTP redirects, whatever the path; HTTPS goes to the app.
+    let resp = plain_client()
+        .get(format!("http://localhost:{port}/.ferry/"))
         .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), 308);
-}
-
-#[tokio::test]
-async fn https_requests_for_the_trust_page_go_to_the_app() {
-    let up = tcp_upstream("127.0.0.1:0").await;
-    let port = free_port();
-    let _ferry = Ferry::start(&[&format!("{port}:{up}")], port);
     let resp = client(false)
         .get(format!("https://localhost:{port}/.ferry/"))
         .send()
@@ -118,14 +115,13 @@ async fn https_requests_for_the_trust_page_go_to_the_app() {
 }
 
 #[tokio::test]
-async fn trust_page_works_without_redirects() {
+async fn the_trust_page_keeps_its_port_across_reloads() {
     let port = free_port();
-    let _ferry = Ferry::start(&["--no-redirect", &format!("{port}:1")], port);
-    let resp = plain_client()
-        .get(format!("http://localhost:{port}/.ferry/"))
-        .send()
-        .await
-        .unwrap();
+    let ferry = Ferry::start(&[&format!("{port}:1")], port);
+    let page = trust_url(&ferry);
+    ferry.signal("HUP");
+    ferry.wait_for_stderr("reloaded configuration");
+    let resp = plain_client().get(&page).send().await.unwrap();
     assert_eq!(resp.status(), 200);
 }
 
@@ -145,12 +141,6 @@ async fn no_trust_page_with_your_own_certificate() {
         ],
         port,
     );
-    let resp = plain_client()
-        .get(format!("http://localhost:{port}/.ferry/"))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 308);
     assert!(!ferry.data_dir().exists());
     let err = ferry.wait_for_stderr("cert:");
     assert!(err.contains("cert:") && !err.contains("local CA"), "{err}");
@@ -214,4 +204,14 @@ async fn new_cas_have_name_constraints_unless_turned_off() {
     .unwrap();
     let ferry = Ferry::start(&["-c", config.to_str().unwrap()], port);
     assert!(!has_name_constraints(&root_der(&ferry)));
+}
+
+#[tokio::test]
+async fn loopback_only_apps_keep_the_trust_page_local() {
+    let port = free_port();
+    let ferry = Ferry::start(&[&format!("127.0.0.1:{port}:1")], port);
+    let page = trust_url(&ferry);
+    let resp = plain_client().get(&page).send().await.unwrap();
+    assert_eq!(resp.status(), 200);
+    assert!(!ferry.stderr().contains("on a phone"), "{}", ferry.stderr());
 }

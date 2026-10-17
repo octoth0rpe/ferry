@@ -37,12 +37,12 @@ pub type ListenKey = (Option<IpAddr>, u16);
 
 /// How a listener behaves. Swapped atomically on reload.
 pub struct ListenerState {
-    /// `None` for the plain-HTTP port 80 listener that only redirects.
+    /// `None` for the plain-HTTP listeners: port 80 redirecting to 443, and
+    /// the page for trusting the local CA.
     https: Option<Https>,
     log: Arc<AccessLogger>,
     redirect: bool,
-    /// Set when the listener uses ferry's local CA: plain HTTP requests can
-    /// fetch it from `/.ferry/`.
+    /// Set on the listener that serves the page for trusting the local CA.
     trust_page: Option<Arc<trust::Page>>,
     handshake_timeout: Duration,
     idle_timeout: Duration,
@@ -53,14 +53,28 @@ struct Https {
     route: Arc<Route>,
 }
 
+/// What a listener is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// HTTPS for a mapping.
+    App,
+    /// Plain HTTP on port 80, redirecting to 443.
+    Redirect,
+    /// The page for trusting the local CA, over plain HTTP on a port the OS
+    /// picks (port 0 in the key), so ferry never serves anything of its own
+    /// at an app's address.
+    Trust,
+}
+
 /// A listener ready to start: its key, how it's described to people, and its
 /// state.
 pub struct ListenerSpec {
     pub key: ListenKey,
     pub listen: String,
     pub state: ListenerState,
-    /// If it can't be bound, warn and carry on without it.
-    pub optional: bool,
+    /// Only app listeners are required; if another can't be bound, ferry
+    /// warns and carries on without it.
+    pub kind: Kind,
 }
 
 /// Everything [`build`] prepared, plus things worth telling the user.
@@ -71,6 +85,8 @@ pub struct Plan {
     pub warnings: Vec<String>,
     /// Set when any listener uses ferry's local CA.
     pub local_ca: Option<ca::LocalCa>,
+    /// The port the page for trusting the local CA ended up on, once bound.
+    pub trust_port: Option<u16>,
 }
 
 /// Loads certificates and builds listener state for a config. Doesn't bind.
@@ -144,15 +160,11 @@ pub fn build(config: &Config) -> Result<Plan, Vec<String>> {
                 }),
                 log: log.clone(),
                 redirect: config.redirect,
-                trust_page: l
-                    .cert_key(config)
-                    .is_none()
-                    .then(|| trust_page.clone())
-                    .flatten(),
+                trust_page: None,
                 handshake_timeout: adv.handshake_timeout,
                 idle_timeout: adv.idle_timeout,
             },
-            optional: false,
+            kind: Kind::App,
         });
     }
 
@@ -174,13 +186,37 @@ pub fn build(config: &Config) -> Result<Plan, Vec<String>> {
                     https: None,
                     log: log.clone(),
                     redirect: true,
-                    trust_page: trust_page.clone(),
+                    trust_page: None,
                     handshake_timeout: config.advanced.handshake_timeout,
                     idle_timeout: config.advanced.idle_timeout,
                 },
-                optional: true,
+                kind: Kind::Redirect,
             });
         }
+    }
+
+    // The trust page listens wherever phones can reach the apps: everywhere,
+    // unless every app using the CA is on loopback only.
+    if let Some(page) = trust_page {
+        let local_only = config
+            .listeners
+            .iter()
+            .filter(|l| l.cert_key(config).is_none())
+            .all(|l| l.mapping.bind.is_some_and(|ip| ip.is_loopback()));
+        let bind = local_only.then(|| IpAddr::from([127, 0, 0, 1]));
+        listeners.push(ListenerSpec {
+            key: (bind, 0),
+            listen: "the page for trusting ferry's local CA".into(),
+            state: ListenerState {
+                https: None,
+                log: log.clone(),
+                redirect: false,
+                trust_page: Some(page),
+                handshake_timeout: config.advanced.handshake_timeout,
+                idle_timeout: config.advanced.idle_timeout,
+            },
+            kind: Kind::Trust,
+        });
     }
 
     if errors.is_empty() {
@@ -189,6 +225,7 @@ pub fn build(config: &Config) -> Result<Plan, Vec<String>> {
             log,
             warnings,
             local_ca,
+            trust_port: None,
         })
     } else {
         errors.dedup();
@@ -216,9 +253,12 @@ pub fn bind<'a>(
             Ok(s) => {
                 sockets.insert(spec.key, s);
             }
-            Err(e) if spec.optional => warnings.push(format!(
+            Err(e) if spec.kind == Kind::Redirect => warnings.push(format!(
                 "not redirecting port 80 to 443: {}",
                 net::bind_error(&spec.listen, spec.key.1, &e)
+            )),
+            Err(e) if spec.kind == Kind::Trust => warnings.push(format!(
+                "can't serve the page for trusting ferry's local CA: {e}"
             )),
             Err(e) => errors.push(net::bind_error(&spec.listen, spec.key.1, &e)),
         }
@@ -273,8 +313,8 @@ impl Server {
             }
             let Some(socket) = sockets.remove(&spec.key) else {
                 assert!(
-                    spec.optional,
-                    "a socket is bound for every required listener"
+                    spec.kind != Kind::App,
+                    "a socket is bound for every app listener"
                 );
                 continue;
             };
@@ -436,9 +476,8 @@ async fn handle_connection(
     }
 }
 
-/// Answers plain HTTP sent to a TLS port: ferry's `/.ferry/` page if the
-/// port uses the local CA, otherwise a redirect to HTTPS or a short
-/// explanation.
+/// Answers plain HTTP: the page for trusting the local CA on its own port,
+/// otherwise a redirect to HTTPS or a short explanation.
 /// `default_port` is for the port 80 listener: redirect to the default
 /// HTTPS port rather than the same one.
 async fn serve_plain(
@@ -455,8 +494,8 @@ async fn serve_plain(
         let trust_page = trust_page.clone();
         async move {
             let pending = Pending::new(&req, peer);
-            let (resp, upstream) = match trust_page.and_then(|page| page.respond(&req)) {
-                Some(resp) => (resp, "ferry"),
+            let (resp, upstream) = match trust_page {
+                Some(page) => (page.respond(&req), "ferry"),
                 None => (redirect_response(&req, redirect, default_port), "redirect"),
             };
             let id = HeaderValue::from_static("-");
@@ -616,7 +655,10 @@ mod tests {
         let (dir, config) = config(args);
         let plan = build(&config).unwrap();
         let _ = std::fs::remove_dir_all(dir);
-        plan.listeners.iter().map(|l| (l.key, l.optional)).collect()
+        plan.listeners
+            .iter()
+            .map(|l| (l.key, l.kind != Kind::App))
+            .collect()
     }
 
     #[test]
