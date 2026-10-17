@@ -26,12 +26,90 @@ ferry 0.1.0
 ```
 
 **HTTPS for development, with a path to production.** ferry gives your dev
-server HTTPS in one command: no nginx or Caddy setup, no certificates to make.
+server HTTPS in one command, on your computer and [on your
+phone](#your-dev-server-on-your-phone): no nginx or Caddy setup, no
+certificates to make.
 When the project is ready to ship, ferry will write you an equivalent nginx or
 Caddy config (coming in v0.3), so what worked in development carries over.
 
 ferry runs on macOS and Linux. It's a single binary with no runtime
 dependencies.
+
+## Your dev server on your phone
+
+To test a web app properly on a phone, you need HTTPS the phone actually
+trusts. Clicking through a certificate warning isn't enough:
+
+- **Service workers won't register** in Chrome on a certificate error, even
+  after you click through. So no offline mode and no install prompt: you
+  can't test a PWA.
+- **iOS can't fully trust a self-signed certificate.** Safari's
+  click-through lasts one session, and Home Screen apps get no click-through
+  at all: their requests just fail.
+- **Camera, microphone, geolocation, clipboard and push** only work in a
+  secure context.
+
+With ferry it's one command:
+
+```sh
+ferry 6005:5173 -- npm run dev
+```
+
+ferry starts your dev server and waits for it. Then it prints two QR codes:
+
+```
+  on a phone, scan this first:     Trust ferry's CA, once per phone:
+  (QR code)                        iPhone
+                                    • Open the page in Safari and
+                                      download the certificate.
+                                    • Settings → General → VPN & Device
+                                      Management → ferry local CA →
+                                      Install (within 8 minutes).
+                                    • General → About → Certificate
+                                      Trust Settings → ferry local CA.
+                                   Android
+                                    • Download the certificate.
+                                    • Settings → search "CA certificate"
+                                      → Install anyway → ferry-ca.crt.
+  http://192.168.1.20:52814/
+  ────────────────────────────────────────────────────────────────────
+   https://192.168.1.20:6005
+  (QR code)
+```
+
+1. **Once per phone, scan the first code.** It opens a page that serves
+   ferry's certificate authority (CA) and walks you through trusting it on
+   iOS or Android. It takes about a minute.
+2. **Scan the second code** to open your app over HTTPS the phone trusts.
+   Service workers register, Add to Home Screen works, and so do the
+   secure-context APIs. Hot reload works too, since WebSockets pass through.
+
+From then on that phone trusts every ferry on your computer, without
+warnings. When your laptop moves to another network and gets a new address,
+ferry issues a new certificate by itself, and the phone still trusts it,
+because it trusts the CA rather than one certificate.
+
+**Compared with the usual setup.** Doing this by hand means running mkcert
+or Caddy's internal CA and getting the root certificate onto the phone
+yourself, by AirDrop, email or a file server. You'd also write an nginx or
+Caddy config, look up your LAN address, and make a new certificate whenever
+that address changes. ferry does all of that from the one command, and the
+QR codes mean you never type an IP address on a phone.
+
+**Safe by default.** ferry's CA can only vouch for local names (`localhost`,
+`*.local`) and private addresses. If its key ever leaked, it couldn't be used
+to impersonate other websites to your phone (Android ignores this limit; see
+[The local CA](#the-local-ca)). The setup page comes over plain HTTP, so check
+its fingerprint matches the one in ferry's banner.
+
+**Try it** with the small PWA in `tools/pwa-test`. It reports whether it's
+in a secure context, whether its service worker is running, and whether it's
+running from the Home Screen:
+
+```sh
+cd tools/pwa-test
+ferry 6005:8000 -- python3 -m http.server 8000 --bind 127.0.0.1
+```
 
 ## Why ferry
 
@@ -42,9 +120,10 @@ configure anything:
   certificate authority, covering `localhost`, your hostname and your LAN
   addresses. Trust the CA once and it stays trusted, even as your addresses
   change.
-- **Test on your phone.** Scan the QR code in the banner and ferry walks you
-  through trusting its CA on iOS or Android, so service workers and PWAs
-  work on a real device.
+- **Test on your phone.** Scan a QR code and ferry walks you through
+  trusting its CA on iOS or Android, so service workers, PWAs and
+  secure-context APIs work on a real device. See
+  [Your dev server on your phone](#your-dev-server-on-your-phone).
 - **HTTP/2 and HTTP/1.1** to clients, negotiated automatically.
 - **WebSockets just work**, so dev-server hot reload (Vite, Next.js, …) works
   through ferry.
@@ -214,23 +293,13 @@ instead set `security.enterprise_roots.enabled` to `true` in Firefox's
 `about:config`, so it uses the keychain.
 
 **Phones.** When stderr is a terminal, the banner shows a QR code for that
-page at your LAN address, with the steps beside it, and below that a QR code
-for each app. Scan the first and follow the steps for your
-phone:
-
-- **iPhone and iPad:** open the page in Safari (only Safari can install
-  profiles) and download the certificate. Install the profile from Settings →
-  General → VPN & Device Management within 8 minutes (iOS discards it after
-  that), then turn on full trust under Settings → General → About →
-  Certificate Trust Settings.
-- **Android:** download the certificate, then install it from Settings →
-  Security → Encryption & credentials → Install a certificate → CA
-  certificate. Android then shows "Network may be monitored"; that's expected.
-
-The page comes over plain HTTP, so check the fingerprint on it matches the one
-in ferry's banner. If every app that uses the CA listens on loopback only,
-so phones couldn't reach it anyway, the page does too. To leave the QR codes out of the banner, set `qr_code = false` under
-`[advanced]`.
+page at your LAN address, with the steps beside it, and a QR code for each
+app; see [Your dev server on your phone](#your-dev-server-on-your-phone).
+Android then shows "Network may be monitored", which is expected for any
+certificate you add yourself. If every app that uses the CA listens on
+loopback only, phones couldn't reach it anyway, so the page listens on
+loopback too. To leave the QR codes out of the banner, set `qr_code = false`
+under `[advanced]`.
 
 Keep `ca-key.pem` private all the same: anyone with it could impersonate your
 local sites to devices that trust your CA.
