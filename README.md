@@ -20,9 +20,9 @@ ferry 0.1.0
   (QR code)                             iPhone
                                          • Open the page in Safari and ...
   http://192.168.1.20:52814/
-  then open the app on :6005:
+  ──────────────────────────────────────────────────────────────────
+     https://192.168.1.20:6005
   (QR code)
-  https://192.168.1.20:6005/
 ```
 
 **HTTPS for development, with a path to production.** ferry gives your dev

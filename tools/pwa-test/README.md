@@ -24,8 +24,8 @@ the second to open the app.
   Certificate Trust Settings.
 - **Service worker: registered and active.** Chrome refuses to register one
   on a certificate error, even after a click-through.
-- **This page: controlled**, after one reload: the service worker is serving
-  it from its cache.
+- **This page: controlled**, a moment after the first load: the service
+  worker has taken over the page, and serves it from its cache from then on.
 - **Display mode: standalone**, when launched from the Home Screen. Force-quit
   and relaunch; it should still be controlled. Stop ferry and relaunch again:
   it should still open, from the cache.

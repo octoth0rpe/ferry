@@ -147,16 +147,39 @@ fn phone_section(config: &Config, plan: &Plan, color: bool, qr: bool) -> String 
         .into_iter()
         .map(|port| {
             let url = match port {
-                443 => format!("https://{ip}/"),
-                p => format!("https://{ip}:{p}/"),
+                443 => format!("https://{ip}"),
+                p => format!("https://{ip}:{p}"),
             };
-            panel(&format!("then open the app on :{port}:"), &url, color)
+            app_panel(&url, color)
         })
         .collect();
+    if trust.is_some() && !apps.is_empty() {
+        let _ = writeln!(out, "  {dim}{}{reset}", "─".repeat(76));
+    }
     for line in rows(&apps).concat() {
         let _ = writeln!(out, "  {line}");
     }
     out
+}
+
+/// An app's QR code with its URL centred above it.
+fn app_panel(url: &str, color: bool) -> Panel {
+    let code = qr_code(url, color);
+    let url_width = url.chars().count();
+    let width = code
+        .iter()
+        .map(|(_, w)| *w)
+        .max()
+        .unwrap_or(0)
+        .max(url_width);
+    let centred = |(text, w): (String, usize)| {
+        let pad = (width - w) / 2;
+        (format!("{}{text}", " ".repeat(pad)), w + pad)
+    };
+    std::iter::once((url.to_string(), url_width))
+        .chain(code)
+        .map(centred)
+        .collect()
 }
 
 /// One labelled QR code: its lines, each with its width on screen.
@@ -365,6 +388,18 @@ mod tests {
             rows_of(&[wide.clone(), short.clone()]),
             vec![wide.len(), short.len()]
         );
+    }
+
+    #[test]
+    fn app_panels_centre_the_url_over_the_code() {
+        let url = "https://192.168.1.20:6005";
+        let panel = app_panel(url, false);
+        let qr_width = panel[1].1;
+        assert!(qr_width > url.len());
+        let pad = (qr_width - url.len()) / 2;
+        assert_eq!(panel[0].0, format!("{}{url}", " ".repeat(pad)));
+        assert_eq!(panel[0].1, url.len() + pad);
+        assert!(panel[1..].iter().all(|(_, w)| *w == qr_width));
     }
 
     #[test]

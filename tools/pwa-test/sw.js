@@ -1,6 +1,6 @@
 // Caches the app shell, then serves it cache-first, so a relaunch works
 // even if the network (or ferry) is down.
-const CACHE = 'ferry-pwa-test-v1';
+const CACHE = 'ferry-pwa-test-v2';
 const SHELL = ['./', 'index.html', 'manifest.json', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', e => {

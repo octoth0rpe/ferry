@@ -18,8 +18,8 @@
   <li>This page: <b id=controlled></b></li>
   <li>Display mode: <b id=mode></b></li>
 </ul>
-<p>Reload once after the service worker is active: the page should then be
-"controlled". Add it to the Home Screen, force-quit, relaunch: it should still
+<p>On the first visit the service worker takes over the page a moment after
+it loads. Add it to the Home Screen, force-quit, relaunch: it should still
 say "controlled" and "standalone".</p>
 <script>
   const set = (id, text, ok) => {
@@ -31,9 +31,13 @@ say "controlled" and "standalone".</p>
   set('secure', isSecureContext ? 'yes' : 'no (certificate not trusted, or plain HTTP)', isSecureContext);
   const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
   set('mode', standalone ? 'standalone (Home Screen app)' : 'browser tab');
-  set('controlled', navigator.serviceWorker?.controller
+  // A new service worker takes over the open page when it activates
+  // (clients.claim() in sw.js), which fires controllerchange.
+  const showControl = () => set('controlled', navigator.serviceWorker?.controller
     ? 'controlled by the service worker' : 'not controlled (yet)',
     !!navigator.serviceWorker?.controller);
+  showControl();
+  navigator.serviceWorker?.addEventListener('controllerchange', showControl);
   if (!('serviceWorker' in navigator)) {
     set('sw', 'not available (needs a trusted HTTPS page)', false);
   } else {
