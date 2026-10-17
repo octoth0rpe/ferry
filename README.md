@@ -1,18 +1,26 @@
 # ferry
 
 **A very simple HTTPS reverse proxy.** One command gives your dev server
-HTTPS that your browser *and your phone* trust. ferry makes the certificates
-itself, from a local certificate authority you trust once per device, so
-there's nothing to configure and nothing to generate:
+HTTPS that your browser *and your phone* trust, without setting up nginx or
+Caddy.
+
+- **No certificates to make.** ferry runs its own local CA; trust it once
+  per device.
+- **Phones in a minute.** Scan one QR code to trust the CA, another to open
+  your app. PWAs, service workers and camera APIs then just work.
+- **Runs your dev server too**, and holds requests until it's listening.
+- **Ready for a real server**: your own certificate, port 80 redirecting to
+  443, and live reload when certbot renews.
+- **One binary** for macOS and Linux, with nothing to configure.
 
 ```sh
-ferry 6005:5173 -- npm run dev
+ferry 5273:5173 -- npm run dev
 ```
 
 ```
 ferry 0.1.0
-  https://localhost:6005  →  http://localhost:5173
-  https://192.168.1.20:6005
+  https://localhost:5273  →  http://localhost:5173
+  https://192.168.1.20:5273
   cert: ferry local CA (~/Library/Application Support/ferry/ca.pem), SHA-256 03:0B:A0…EC:72:DA
   NOTE: Browsers will warn until you trust the CA; see http://192.168.1.20:52814/
 
@@ -51,111 +59,11 @@ ferry 0.1.0
   ██ █▄▄▄█ ██▀▀▄▄██▄  ▄▄▄█▀▀ ██
   ██▄▄▄▄▄▄▄█▄██▄██▄▄█▄█▄█▄█▄▄██
   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
-  https://192.168.1.20:6005
+  https://192.168.1.20:5273
 ```
 
 See [Your dev server on your phone](#your-dev-server-on-your-phone) for what
 the QR codes do.
-
-**A path to production.** Give ferry your own certificate and it serves real
-traffic too. When the project is ready to ship, ferry will write you an
-equivalent nginx or Caddy config (coming in v0.3), so what worked in
-development carries over.
-
-ferry runs on macOS and Linux. It's a single binary with no runtime
-dependencies.
-
-## Your dev server on your phone
-
-To test a web app properly on a phone, you need HTTPS the phone actually
-trusts. Clicking through a certificate warning isn't enough:
-
-- **Service workers won't register** in Chrome on a certificate error, even
-  after you click through. So no offline mode and no install prompt: you
-  can't test a PWA.
-- **iOS can't fully trust a self-signed certificate.** Safari's
-  click-through lasts one session, and Home Screen apps get no click-through
-  at all: their requests just fail.
-- **Camera, microphone, geolocation, clipboard and push** only work in a
-  secure context.
-
-With ferry it's one command:
-
-```sh
-ferry 6005:5173 -- npm run dev
-```
-
-ferry starts your dev server and waits for it. Then it prints QR codes, as in
-the banner at the top of this page: one for setting up the phone, with the
-steps beside it, and one for each app.
-
-1. **Once per phone, scan the first code.** It opens a page that serves
-   ferry's certificate authority (CA) and walks you through trusting it on
-   iOS or Android. It takes about a minute.
-2. **Scan the second code** to open your app over HTTPS the phone trusts.
-   Service workers register, Add to Home Screen works, and so do the
-   secure-context APIs. Hot reload works too, since WebSockets pass through.
-
-From then on that phone trusts every ferry on your computer, without
-warnings. When your laptop moves to another network and gets a new address,
-ferry issues a new certificate by itself, and the phone still trusts it,
-because it trusts the CA rather than one certificate.
-
-**Compared with the usual setup.** Doing this by hand means running mkcert
-or Caddy's internal CA and getting the root certificate onto the phone
-yourself, by AirDrop, email or a file server. You'd also write an nginx or
-Caddy config, look up your LAN address, and make a new certificate whenever
-that address changes. ferry does all of that from the one command, and the
-QR codes mean you never type an IP address on a phone.
-
-**Safe by default.** ferry's CA can only vouch for local names (`localhost`,
-`*.local`) and private addresses. If its key ever leaked, it couldn't be used
-to impersonate other websites to your phone (Android ignores this limit; see
-[The local CA](#the-local-ca)). The setup page comes over plain HTTP, so check
-its fingerprint starts and ends the same as the one on ferry's `cert:` line.
-
-**Try it** with the small PWA in `tools/pwa-test`. It reports whether it's
-in a secure context, whether its service worker is running, and whether it's
-running from the Home Screen:
-
-```sh
-cd tools/pwa-test
-ferry 6005:8000 -- python3 -m http.server 8000 --bind 127.0.0.1
-```
-
-## Why ferry
-
-ferry does one job, and its defaults are chosen so you rarely need to
-configure anything:
-
-- **No certificate needed.** Without one, ferry issues one from its own local
-  certificate authority, covering `localhost`, your hostname and your LAN
-  addresses. Trust the CA once and it stays trusted, even as your addresses
-  change.
-- **Test on your phone.** Scan a QR code and ferry walks you through
-  trusting its CA on iOS or Android, so service workers, PWAs and
-  secure-context APIs work on a real device. See
-  [Your dev server on your phone](#your-dev-server-on-your-phone).
-- **HTTP/2 and HTTP/1.1** to clients, negotiated automatically.
-- **WebSockets just work**, so dev-server hot reload (Vite, Next.js, …) works
-  through ferry.
-- **Runs your dev server too.** `ferry 6005:5173 -- npm run dev` starts it,
-  holds requests until it's listening, and exits when it does.
-- **Plain HTTP is redirected to HTTPS** on the same port
-  (`http://localhost:6005` → `https://localhost:6005`). `80/443:6006` also
-  opens port 80, redirecting to 443. ferry only opens the ports you name.
-- **IPv4 and IPv6** on one socket. Upstream `localhost` works whether your
-  app listens on `127.0.0.1` or `::1`.
-- **Unix socket upstreams**: `ferry 443:/run/app.sock`.
-- **Live reload.** Edit the config file or renew a certificate and ferry
-  applies the change without dropping connections. A broken edit is rejected
-  and the running config keeps going.
-- **Helpful errors.** When your app isn't running, you get a page that says
-  *"nothing is listening on localhost:6006 — is your app running?"*, not a
-  bare 502.
-- Access logs (common, combined or JSON), request IDs, `X-Forwarded-*`
-  headers, body size limits, graceful shutdown, a config checker, and
-  background mode with a pid file.
 
 ## Install
 
@@ -265,13 +173,71 @@ ferry reloads the file when it changes. See [Config file](#config-file).
 Coming in v0.3: `ferry --print-config nginx` and `--print-config caddy` will
 write an equivalent config for the same setup.
 
-### Running your app with ferry
+## Your dev server on your phone
+
+To test a web app properly on a phone, you need HTTPS the phone actually
+trusts. Clicking through a certificate warning isn't enough:
+
+- **Service workers won't register** in Chrome on a certificate error, even
+  after you click through. So no offline mode and no install prompt: you
+  can't test a PWA.
+- **iOS can't fully trust a self-signed certificate.** Safari's
+  click-through lasts one session, and Home Screen apps get no click-through
+  at all: their requests just fail.
+- **Camera, microphone, geolocation, clipboard and push** only work in a
+  secure context.
+
+With ferry it's one command:
+
+```sh
+ferry 5273:5173 -- npm run dev
+```
+
+ferry starts your dev server and waits for it. Then it prints QR codes, as in
+the banner at the top of this page: one for setting up the phone, with the
+steps beside it, and one for each app.
+
+1. **Once per phone, scan the first code.** It opens a page that serves
+   ferry's certificate authority (CA) and walks you through trusting it on
+   iOS or Android. It takes about a minute.
+2. **Scan the second code** to open your app over HTTPS the phone trusts.
+   Service workers register, Add to Home Screen works, and so do the
+   secure-context APIs. Hot reload works too, since WebSockets pass through.
+
+From then on that phone trusts every ferry on your computer, without
+warnings. When your laptop moves to another network and gets a new address,
+ferry issues a new certificate by itself, and the phone still trusts it,
+because it trusts the CA rather than one certificate.
+
+**Compared with the usual setup.** Doing this by hand means running mkcert
+or Caddy's internal CA and getting the root certificate onto the phone
+yourself, by AirDrop, email or a file server. You'd also write an nginx or
+Caddy config, look up your LAN address, and make a new certificate whenever
+that address changes. ferry does all of that from the one command, and the
+QR codes mean you never type an IP address on a phone.
+
+**Safe by default.** ferry's CA can only vouch for local names (`localhost`,
+`*.local`) and private addresses. If its key ever leaked, it couldn't be used
+to impersonate other websites to your phone (Android ignores this limit; see
+[The local CA](#the-local-ca)). The setup page comes over plain HTTP, so check
+its fingerprint starts and ends the same as the one on ferry's `cert:` line.
+
+**Try it** with the small PWA in `tools/pwa-test`. It reports whether it's
+in a secure context, whether its service worker is running, and whether it's
+running from the Home Screen:
+
+```sh
+cd tools/pwa-test
+ferry 6005:8000 -- python3 -m http.server 8000 --bind 127.0.0.1
+```
+
+## Running your app with ferry
 
 Everything after `--` is a command ferry runs alongside itself, usually your
 dev server:
 
 ```sh
-ferry 6005:5173 -- npm run dev
+ferry 5273:5173 -- npm run dev
 ```
 
 - The command shares the terminal: you see its output, and it can read your
@@ -505,6 +471,7 @@ that parse those formats need their date format set accordingly.)
 
 ## What ferry does to requests
 
+- Speaks HTTP/2 and HTTP/1.1 to clients, negotiated automatically (ALPN).
 - Forwards the method, path, query and headers unchanged, and keeps `Host`
   as the client sent it.
 - Removes hop-by-hop headers (`Connection` and the headers it names,
