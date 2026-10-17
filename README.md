@@ -17,21 +17,21 @@ ferry 0.1.0
   CA fingerprint (SHA-256):
     03:0B:A0:99:DC:39:A1:83:8F:C7:78:3B:B2:1A:DB:BB
     62:15:FB:C0:95:2B:0B:AF:8F:B7:F8:67:E0:EC:72:DA
-  browsers warn until you trust the CA; see http://localhost:52814/
-  on a phone, scan this first:         Trust ferry's CA, once per phone:
-  █████████████████████████████████    iPhone
-  ██ ▄▄▄▄▄ █▄▄▀▄█  █▄█▀▄▄█ ▄▄▄▄▄ ██     • Open the page in Safari and
-  ██ █   █ ████▄  ▄█▀█  ▀█ █   █ ██       download the certificate.
-  ██ █▄▄▄█ █▄ █▄▄▀▄▄▄▀▄ ██ █▄▄▄█ ██     • Settings → General → VPN & Device
-  ██▄▄▄▄▄▄▄███▀▄█▀█▀▄  █ █▄▄▄▄▄▄▄██       Management → ferry local CA →
-  ███▀ █   ▀█▀▄▀█▄▀   █▀▀▄ █▀ ▀▄▄██       Install (within 8 minutes).
-  ███  ▀▀█▀              ▄ ▀█▄ █▀██     • General → About → Certificate
-  ██▀  ▀▀█▀  NOT A REAL   ▄▄▄ █ ▀██       Trust Settings → ferry local CA.
-  ████▄▀█▄▀   QR CODE    ▄▀█ ▀ ▀▄██    Android
-  ██▄▄▄ ██▀              ▀ ▄▄█▄█▀██     • Download the certificate.
-  ███▄█▀ ▄██ ▄   ██▀▀█ ███▀▄█▀▀█▀██     • Settings → search "CA certificate"
-  ██▄██▄██▄█▀█ ▀▄▀▄▀█▄ ▀▀▀ ▀▀▄▄▀▀██       → Install anyway → ferry-ca.crt.
-  ██ ▄▄▄▄▄ █▄    ▄█ ▀▄▀ ▀▀▀▄██▄▄▀██
+  NOTE: Browsers will warn until you trust the CA; see http://localhost:52814/
+  On a phone, scan this first:
+  █████████████████████████████████    Trust ferry's CA, once per phone:
+  ██ ▄▄▄▄▄ █▄▄▀▄█  █▄█▀▄▄█ ▄▄▄▄▄ ██    iPhone
+  ██ █   █ ████▄  ▄█▀█  ▀█ █   █ ██     • Open the page in Safari and
+  ██ █▄▄▄█ █▄ █▄▄▀▄▄▄▀▄ ██ █▄▄▄█ ██       download the certificate.
+  ██▄▄▄▄▄▄▄███▀▄█▀█▀▄  █ █▄▄▄▄▄▄▄██     • Settings → General → VPN & Device
+  ███▀ █   ▀█▀▄▀█▄▀   █▀▀▄ █▀ ▀▄▄██       Management → ferry local CA →
+  ███  ▀▀█▀              ▄ ▀█▄ █▀██       Install (within 8 minutes).
+  ██▀  ▀▀█▀  NOT A REAL   ▄▄▄ █ ▀██     • General → About → Certificate
+  ████▄▀█▄▀   QR CODE    ▄▀█ ▀ ▀▄██       Trust Settings → ferry local CA.
+  ██▄▄▄ ██▀              ▀ ▄▄█▄█▀██    Android
+  ███▄█▀ ▄██ ▄   ██▀▀█ ███▀▄█▀▀█▀██     • Download the certificate.
+  ██▄██▄██▄█▀█ ▀▄▀▄▀█▄ ▀▀▀ ▀▀▄▄▀▀██     • Settings → search "CA certificate"
+  ██ ▄▄▄▄▄ █▄    ▄█ ▀▄▀ ▀▀▀▄██▄▄▀██       → Install anyway → ferry-ca.crt.
   ██ █   █ █▀▀█▄ ▄ █ ▀▀█▀▀▄█▄▀▀▀▄██
   ██ █▄▄▄█ ██▀█████▄▄ █▄▄█▄█▀▄▄  ██
   ██▄▄▄▄▄▄▄█▄█▄▄█▄▄▄██▄▄██▄█▄▄██▄██

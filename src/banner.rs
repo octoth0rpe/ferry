@@ -90,7 +90,7 @@ fn trust_section(plan: &Plan, ca: &LocalCa, color: bool) -> String {
     if let Some((port, _)) = trust_listener(plan) {
         let _ = writeln!(
             out,
-            "  {dim}browsers warn until you trust the CA; see {}{reset}",
+            "  {dim}NOTE: Browsers will warn until you trust the CA; see {}{reset}",
             trust_page("localhost", port)
         );
     }
@@ -119,7 +119,7 @@ fn phone_section(config: &Config, plan: &Plan, color: bool, qr: bool) -> String 
     let mut out = String::new();
     if !qr {
         if let Some(page) = &trust {
-            let _ = writeln!(out, "  {dim}on a phone, trust the CA at {page}{reset}");
+            let _ = writeln!(out, "  {dim}On a phone, trust the CA at {page}{reset}");
             for line in &PHONE_STEPS[1..] {
                 let _ = writeln!(out, "  {dim}  {line}{reset}");
             }
@@ -130,11 +130,15 @@ fn phone_section(config: &Config, plan: &Plan, color: bool, qr: bool) -> String 
     // The CA first, in a row of its own with the steps beside it, since a
     // phone has to trust it before the apps will load.
     if let Some(page) = &trust {
-        let steps: Panel = PHONE_STEPS
-            .iter()
-            .map(|line| (format!("{dim}{line}{reset}"), line.chars().count()))
+        // The steps start a line down, level with the top of the code.
+        let steps: Panel = std::iter::once((String::new(), 0))
+            .chain(
+                PHONE_STEPS
+                    .iter()
+                    .map(|line| (format!("{dim}{line}{reset}"), line.chars().count())),
+            )
             .collect();
-        let qr = panel("on a phone, scan this first:", page, color);
+        let qr = panel("On a phone, scan this first:", page, color);
         for line in rows(&[qr, steps]).concat() {
             let _ = writeln!(out, "  {line}");
         }
