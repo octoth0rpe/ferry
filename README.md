@@ -14,12 +14,46 @@ ferry 0.1.0
   https://localhost:6005  →  http://localhost:5173
   https://192.168.1.20:6005
   cert: ferry local CA (~/Library/Application Support/ferry/ca.pem)
-  ...
-  on a phone, scan this first:     Trust ferry's CA, once per phone:
-  (QR code)                        ...
-  ──────────────────────────────────────────────────────────────────
-   https://192.168.1.20:6005
-  (QR code)
+  CA fingerprint (SHA-256):
+    03:0B:A0:99:DC:39:A1:83:8F:C7:78:3B:B2:1A:DB:BB
+    62:15:FB:C0:95:2B:0B:AF:8F:B7:F8:67:E0:EC:72:DA
+  browsers warn until you trust the CA; see http://localhost:52814/
+  on a phone, scan this first:         Trust ferry's CA, once per phone:
+  █████████████████████████████████    iPhone
+  ██ ▄▄▄▄▄ █▄▄▀▄█  █▄█▀▄▄█ ▄▄▄▄▄ ██     • Open the page in Safari and
+  ██ █   █ ████▄  ▄█▀█  ▀█ █   █ ██       download the certificate.
+  ██ █▄▄▄█ █▄ █▄▄▀▄▄▄▀▄ ██ █▄▄▄█ ██     • Settings → General → VPN & Device
+  ██▄▄▄▄▄▄▄███▀▄█▀█▀▄  █ █▄▄▄▄▄▄▄██       Management → ferry local CA →
+  ███▀ █   ▀█▀▄▀█▄▀   █▀▀▄ █▀ ▀▄▄██       Install (within 8 minutes).
+  ███  ▀▀█▀              ▄ ▀█▄ █▀██     • General → About → Certificate
+  ██▀  ▀▀█▀  NOT A REAL   ▄▄▄ █ ▀██       Trust Settings → ferry local CA.
+  ████▄▀█▄▀   QR CODE    ▄▀█ ▀ ▀▄██    Android
+  ██▄▄▄ ██▀              ▀ ▄▄█▄█▀██     • Download the certificate.
+  ███▄█▀ ▄██ ▄   ██▀▀█ ███▀▄█▀▀█▀██     • Settings → search "CA certificate"
+  ██▄██▄██▄█▀█ ▀▄▀▄▀█▄ ▀▀▀ ▀▀▄▄▀▀██       → Install anyway → ferry-ca.crt.
+  ██ ▄▄▄▄▄ █▄    ▄█ ▀▄▀ ▀▀▀▄██▄▄▀██
+  ██ █   █ █▀▀█▄ ▄ █ ▀▀█▀▀▄█▄▀▀▀▄██
+  ██ █▄▄▄█ ██▀█████▄▄ █▄▄█▄█▀▄▄  ██
+  ██▄▄▄▄▄▄▄█▄█▄▄█▄▄▄██▄▄██▄█▄▄██▄██
+  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+  http://192.168.1.20:52814/
+  ────────────────────────────────────────────────────────────────────────────
+    https://192.168.1.20:6005
+  █████████████████████████████
+  ██ ▄▄▄▄▄ ███▀▄▄▄████ ▄▄▄▄▄ ██
+  ██ █   █ ███▀▄ ▄▀ ██ █   █ ██
+  ██ █▄▄▄█ █ ▄▀  █ ▄▀█ █▄▄▄█ ██
+  ██▄▄▄▄▄▄▄██▀▄▄▄▀██▀█▄▄▄▄▄▄▄██
+  ██▀▄▀                █ █▄█▄██
+  ██▄ ▄▄▄  NOT A REAL  ▄▄ █▀ ██
+  █████ █   QR CODE    ▀▀▀▄████
+  ██ ▀▄ █              ▄▄██ ▀██
+  ██▄▄▄█▄█▄▄▄▄▄▄▄▄██▄██ ▄▄ ▀ ██
+  ██ ▄▄▄▄▄ █  █▀▀▄▀▄▀▄▄▀▄▄▀▄ ██
+  ██ █   █ ██▀ ▄▀▄ ▀▄███▄ ▀  ██
+  ██ █▄▄▄█ ██▀▀▄▄██▄  ▄▄▄█▀▀ ██
+  ██▄▄▄▄▄▄▄█▄██▄██▄▄█▄█▄█▄█▄▄██
+  ▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
 ```
 
 See [Your dev server on your phone](#your-dev-server-on-your-phone) for what
@@ -53,27 +87,9 @@ With ferry it's one command:
 ferry 6005:5173 -- npm run dev
 ```
 
-ferry starts your dev server and waits for it. Then it prints two QR codes:
-
-```
-  on a phone, scan this first:     Trust ferry's CA, once per phone:
-  (QR code)                        iPhone
-                                    • Open the page in Safari and
-                                      download the certificate.
-                                    • Settings → General → VPN & Device
-                                      Management → ferry local CA →
-                                      Install (within 8 minutes).
-                                    • General → About → Certificate
-                                      Trust Settings → ferry local CA.
-                                   Android
-                                    • Download the certificate.
-                                    • Settings → search "CA certificate"
-                                      → Install anyway → ferry-ca.crt.
-  http://192.168.1.20:52814/
-  ────────────────────────────────────────────────────────────────────
-   https://192.168.1.20:6005
-  (QR code)
-```
+ferry starts your dev server and waits for it. Then it prints QR codes, as in
+the banner at the top of this page: one for setting up the phone, with the
+steps beside it, and one for each app.
 
 1. **Once per phone, scan the first code.** It opens a page that serves
    ferry's certificate authority (CA) and walks you through trusting it on
