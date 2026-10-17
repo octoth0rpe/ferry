@@ -1,36 +1,34 @@
 # ferry
 
-**A very simple HTTPS reverse proxy.** Point it at an app that speaks plain
-HTTP and get HTTPS in front of it, with no configuration:
+**A very simple HTTPS reverse proxy.** One command gives your dev server
+HTTPS that your browser *and your phone* trust. ferry makes the certificates
+itself, from a local certificate authority you trust once per device, so
+there's nothing to configure and nothing to generate:
 
 ```sh
-ferry 6005:6006
+ferry 6005:5173 -- npm run dev
 ```
 
 ```
 ferry 0.1.0
-  https://localhost:6005  →  http://localhost:6006
+  https://localhost:6005  →  http://localhost:5173
   https://192.168.1.20:6005
   cert: ferry local CA (~/Library/Application Support/ferry/ca.pem)
-  CA fingerprint (SHA-256):
-    03:0B:A0:99:DC:39:A1:83:8F:C7:78:3B:B2:1A:DB:BB
-    62:15:FB:C0:95:2B:0B:AF:8F:B7:F8:67:E0:EC:72:DA
-  browsers warn until you trust the CA; see http://localhost:52814/
-  on a phone, scan this first:          Trust ferry's CA, once per phone:
-  (QR code)                             iPhone
-                                         • Open the page in Safari and ...
-  http://192.168.1.20:52814/
+  ...
+  on a phone, scan this first:     Trust ferry's CA, once per phone:
+  (QR code)                        ...
   ──────────────────────────────────────────────────────────────────
-     https://192.168.1.20:6005
+   https://192.168.1.20:6005
   (QR code)
 ```
 
-**HTTPS for development, with a path to production.** ferry gives your dev
-server HTTPS in one command, on your computer and [on your
-phone](#your-dev-server-on-your-phone): no nginx or Caddy setup, no
-certificates to make.
-When the project is ready to ship, ferry will write you an equivalent nginx or
-Caddy config (coming in v0.3), so what worked in development carries over.
+See [Your dev server on your phone](#your-dev-server-on-your-phone) for what
+the QR codes do.
+
+**A path to production.** Give ferry your own certificate and it serves real
+traffic too. When the project is ready to ship, ferry will write you an
+equivalent nginx or Caddy config (coming in v0.3), so what worked in
+development carries over.
 
 ferry runs on macOS and Linux. It's a single binary with no runtime
 dependencies.
