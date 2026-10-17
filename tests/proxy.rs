@@ -217,6 +217,29 @@ async fn plain_http_redirects_to_https_on_same_port() {
 }
 
 #[tokio::test]
+async fn an_http_port_redirects_to_the_https_one() {
+    let up = tcp_upstream("127.0.0.1:0").await;
+    let (http, https) = (free_port(), free_port());
+    let ferry = Ferry::start(&[&format!("{http}/{https}:{up}")], https);
+    ferry.wait_for_port(http);
+
+    let resp = plain_client()
+        .get(format!("http://localhost:{http}/a/b?c=d"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 308);
+    assert_eq!(
+        resp.headers()["location"],
+        format!("https://localhost:{https}/a/b?c=d").as_str()
+    );
+    // The HTTP port only redirects: it never serves the app, even over TLS.
+    assert!(client(false).get(url(http, "/")).send().await.is_err());
+    let resp = client(false).get(url(https, "/")).send().await.unwrap();
+    assert_eq!(resp.text().await.unwrap(), "hello from upstream");
+}
+
+#[tokio::test]
 async fn no_redirect_explains_instead() {
     let up = tcp_upstream("127.0.0.1:0").await;
     let port = free_port();

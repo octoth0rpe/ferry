@@ -10,8 +10,10 @@
 //! | `[::1]:6005:[::1]:6006`   | `[::1]:6005`     | `http://[::1]:6006`        |
 //! | `6005:http://app:8080`    | all interfaces   | `http://app:8080`          |
 //! | `6005:/run/app.sock`      | all interfaces   | Unix socket `/run/app.sock`|
+//! | `80/443:6006`             | 443, and 80 redirecting to it | `http://localhost:6006` |
 //!
-//! IPv6 addresses must be written in brackets.
+//! IPv6 addresses must be written in brackets. `HTTP/HTTPS` on the listen
+//! side also opens a plain HTTP port that only redirects to the HTTPS one.
 
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -26,7 +28,18 @@ pub struct Mapping {
     /// Address to bind; `None` means all interfaces (IPv4 and IPv6).
     pub bind: Option<IpAddr>,
     pub port: u16,
+    /// A plain HTTP port that redirects to `port` over HTTPS (`80/443`).
+    pub redirect_from: Option<u16>,
     pub upstream: Upstream,
+}
+
+/// The listen side of a mapping: `PORT`, `ADDR:PORT`, or either with
+/// `HTTP/HTTPS` ports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Listen {
+    pub bind: Option<IpAddr>,
+    pub port: u16,
+    pub redirect_from: Option<u16>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,15 +51,26 @@ pub enum Upstream {
 }
 
 impl Mapping {
-    /// Whether two mappings would try to listen on the same socket.
-    pub fn conflicts_with(&self, other: &Mapping) -> bool {
-        self.port == other.port
-            && (self.bind.is_none() || other.bind.is_none() || self.bind == other.bind)
+    /// A port both mappings would listen on with overlapping addresses, if
+    /// there is one.
+    pub fn conflict(&self, other: &Mapping) -> Option<u16> {
+        let overlap = self.bind.is_none() || other.bind.is_none() || self.bind == other.bind;
+        self.ports()
+            .find(|port| overlap && other.ports().any(|p| p == *port))
     }
 
-    /// The listen side as written by a user, e.g. `6005` or `127.0.0.1:6005`.
+    /// Every port the mapping listens on.
+    fn ports(&self) -> impl Iterator<Item = u16> {
+        std::iter::once(self.port).chain(self.redirect_from)
+    }
+
+    /// The listen side as written by a user, e.g. `6005`, `127.0.0.1:6005`
+    /// or `80/443`.
     pub fn listen_display(&self) -> String {
-        listen_display(self.bind, self.port)
+        match self.redirect_from {
+            None => listen_display(self.bind, self.port),
+            Some(from) => listen_display(self.bind, from) + &format!("/{}", self.port),
+        }
     }
 }
 
@@ -98,10 +122,15 @@ impl FromStr for Mapping {
 
 fn parse(s: &str) -> Result<Mapping, String> {
     let (listen, upstream) = split_mapping(s)?;
-    let (bind, port) = parse_listen(listen)?;
+    let Listen {
+        bind,
+        port,
+        redirect_from,
+    } = parse_listen(listen)?;
     Ok(Mapping {
         bind,
         port,
+        redirect_from,
         upstream: parse_upstream(upstream)?,
     })
 }
@@ -128,7 +157,7 @@ fn split_mapping(s: &str) -> Result<(&str, &str), String> {
             ));
         }
         2 => 1,
-        3 if is_digits(parts[0]) => 1,
+        3 if is_ports(parts[0]) => 1,
         3 | 4 => 2,
         _ => return Err(too_many_parts()),
     };
@@ -136,13 +165,31 @@ fn split_mapping(s: &str) -> Result<(&str, &str), String> {
     Ok((&s[..listen_len], &s[listen_len + 1..]))
 }
 
-/// Parses the listen half of a mapping: `PORT` or `ADDR:PORT`.
-pub fn parse_listen(s: &str) -> Result<(Option<IpAddr>, u16), String> {
-    match split_colons(s)?.as_slice() {
-        [port] => Ok((None, parse_port(port)?)),
-        [bind, port] => Ok((Some(parse_bind(bind)?), parse_port(port)?)),
-        _ => Err(too_many_parts()),
-    }
+/// Parses the listen half of a mapping: `PORT` or `ADDR:PORT`, where
+/// `PORT` can be `HTTP/HTTPS`.
+pub fn parse_listen(s: &str) -> Result<Listen, String> {
+    let (bind, ports) = match split_colons(s)?.as_slice() {
+        [ports] => (None, *ports),
+        [bind, ports] => (Some(parse_bind(bind)?), *ports),
+        _ => return Err(too_many_parts()),
+    };
+    let (redirect_from, port) = match ports.split_once('/') {
+        None => (None, parse_port(ports)?),
+        Some((from, to)) => {
+            let (from, to) = (parse_port(from)?, parse_port(to)?);
+            if from == to {
+                return Err(format!(
+                    "the plain HTTP and HTTPS ports must differ, e.g. 80/443 (got {from}/{to})"
+                ));
+            }
+            (Some(from), to)
+        }
+    };
+    Ok(Listen {
+        bind,
+        port,
+        redirect_from,
+    })
 }
 
 /// Parses the upstream half of a mapping: `PORT`, `HOST:PORT`,
@@ -278,6 +325,14 @@ fn is_digits(s: &str) -> bool {
     !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())
 }
 
+/// `PORT` or `HTTP/HTTPS`.
+fn is_ports(s: &str) -> bool {
+    match s.split_once('/') {
+        Some((a, b)) => is_digits(a) && is_digits(b),
+        None => is_digits(s),
+    }
+}
+
 fn too_many_parts() -> String {
     "too many `:`-separated parts (IPv6 addresses need brackets, e.g. [::1])".into()
 }
@@ -411,10 +466,26 @@ mod tests {
 
     #[test]
     fn halves() {
-        assert_eq!(parse_listen("6005").unwrap(), (None, 6005));
+        let listen = |bind: Option<&str>, port, redirect_from| Listen {
+            bind: bind.map(|b| b.parse().unwrap()),
+            port,
+            redirect_from,
+        };
+        assert_eq!(parse_listen("6005").unwrap(), listen(None, 6005, None));
         assert_eq!(
             parse_listen("[::1]:6005").unwrap(),
-            (Some("::1".parse().unwrap()), 6005)
+            listen(Some("::1"), 6005, None)
+        );
+        assert_eq!(parse_listen("80/443").unwrap(), listen(None, 443, Some(80)));
+        assert_eq!(
+            parse_listen("127.0.0.1:8080/8443").unwrap(),
+            listen(Some("127.0.0.1"), 8443, Some(8080))
+        );
+        assert!(parse_listen("443/443").unwrap_err().contains("must differ"));
+        assert!(
+            parse_listen("80/")
+                .unwrap_err()
+                .contains("not a port number")
         );
         assert_eq!(parse_upstream("6006").unwrap(), tcp("localhost", 6006));
         assert_eq!(parse_upstream("app:80").unwrap(), tcp("app", 80));
@@ -426,13 +497,36 @@ mod tests {
     }
 
     #[test]
+    fn redirect_ports() {
+        let m = ok("80/443:6006");
+        assert_eq!((m.redirect_from, m.port), (Some(80), 443));
+        assert_eq!(m.upstream, tcp("localhost", 6006));
+        let m = ok("80/443:app:8080");
+        assert_eq!((m.bind, m.redirect_from, m.port), (None, Some(80), 443));
+        assert_eq!(m.upstream, tcp("app", 8080));
+        let m = ok("[::1]:80/443:/run/app.sock");
+        assert_eq!(m.redirect_from, Some(80));
+        assert_eq!(m.upstream, Upstream::Unix("/run/app.sock".into()));
+    }
+
+    #[test]
     fn conflicts() {
         let a = ok("6005:6006");
-        assert!(a.conflicts_with(&ok("6005:7000")));
-        assert!(a.conflicts_with(&ok("127.0.0.1:6005:7000")));
-        assert!(!a.conflicts_with(&ok("6006:7000")));
-        assert!(!ok("127.0.0.1:6005:1").conflicts_with(&ok("10.0.0.1:6005:1")));
-        assert!(ok("127.0.0.1:6005:1").conflicts_with(&ok("127.0.0.1:6005:2")));
+        assert_eq!(a.conflict(&ok("6005:7000")), Some(6005));
+        assert_eq!(a.conflict(&ok("127.0.0.1:6005:7000")), Some(6005));
+        assert_eq!(a.conflict(&ok("6006:7000")), None);
+        assert_eq!(
+            ok("127.0.0.1:6005:1").conflict(&ok("10.0.0.1:6005:1")),
+            None
+        );
+        assert_eq!(
+            ok("127.0.0.1:6005:1").conflict(&ok("127.0.0.1:6005:2")),
+            Some(6005)
+        );
+        // Redirect ports count too.
+        assert_eq!(ok("80/443:1").conflict(&ok("80:2")), Some(80));
+        assert_eq!(ok("80/443:1").conflict(&ok("80/8443:2")), Some(80));
+        assert_eq!(ok("8080/443:1").conflict(&ok("80/8443:2")), None);
     }
 
     #[test]
@@ -440,5 +534,10 @@ mod tests {
         assert_eq!(ok("6005:6006").listen_display(), "6005");
         assert_eq!(ok("127.0.0.1:6005:6006").listen_display(), "127.0.0.1:6005");
         assert_eq!(ok("[::1]:6005:6006").listen_display(), "[::1]:6005");
+        assert_eq!(ok("80/443:6006").listen_display(), "80/443");
+        assert_eq!(
+            ok("127.0.0.1:80/443:1").listen_display(),
+            "127.0.0.1:80/443"
+        );
     }
 }

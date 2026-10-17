@@ -15,6 +15,7 @@ Mappings (LISTEN:UPSTREAM):
   6005:10.0.0.5:6006      forward to another host
   6005:/run/app.sock      forward to a Unix socket
   [::1]:6005:6006         IPv6 addresses go in brackets
+  80/443:6006             also http on 80, redirecting to https on 443
 
 Without CERT and KEY, ferry issues a certificate from its own local CA.
 The banner links to a page about trusting the CA.
@@ -74,7 +75,7 @@ pub struct Cli {
     #[arg(long, value_name = "SIZE")]
     pub max_body: Option<String>,
 
-    /// Don't redirect plain HTTP requests to HTTPS
+    /// Don't redirect plain HTTP sent to an HTTPS port
     #[arg(long)]
     pub no_redirect: bool,
 

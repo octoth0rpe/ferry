@@ -127,9 +127,9 @@ configure anything:
   through ferry.
 - **Runs your dev server too.** `ferry 6005:5173 -- npm run dev` starts it,
   holds requests until it's listening, and exits when it does.
-- **Plain HTTP is redirected to HTTPS**, both on the same port
-  (`http://localhost:6005` → `https://localhost:6005`) and from port 80 to
-  443.
+- **Plain HTTP is redirected to HTTPS** on the same port
+  (`http://localhost:6005` → `https://localhost:6005`). `80/443:6006` also
+  opens port 80, redirecting to 443. ferry only opens the ports you name.
 - **IPv4 and IPv6** on one socket. Upstream `localhost` works whether your
   app listens on `127.0.0.1` or `::1`.
 - **Unix socket upstreams**: `ferry 443:/run/app.sock`.
@@ -167,6 +167,9 @@ ferry 6005:6006
 
 # Your own certificate, several apps at once
 ferry ./fullchain.pem ./privkey.pem 443:3000 8443:3001
+
+# A public server: HTTPS on 443, and port 80 redirecting to it
+ferry ./fullchain.pem ./privkey.pem 80/443:3000
 
 # An app listening on a Unix socket
 ferry 443:/run/app.sock
@@ -215,9 +218,18 @@ plain HTTP.
 | `6005:/run/app.sock`      | all interfaces    | Unix socket                |
 | `6005:./app.sock`         | all interfaces    | Unix socket, relative path |
 | `[::1]:6005:[::1]:6006`   | `::1` only        | `http://[::1]:6006`        |
+| `80/443:6006`             | 443, plus 80 redirecting to it | `http://localhost:6006` |
 
 IPv6 addresses go in brackets. A Unix socket path must start with `/`, `./`
 or `../`.
+
+**`HTTP/HTTPS` ports.** `80/443:6006` serves HTTPS on 443 and also listens
+for plain HTTP on 80, where every request is redirected (308) to the same
+URL over HTTPS on 443. Port 80 never serves your app. That's what a public
+server usually wants. Any pair works, such as `8080/8443:6006` without root,
+and so do bind addresses (`127.0.0.1:80/443:6006`) and the config file
+(`listen = "80/443"`). ferry never opens a port you didn't name: `443:6006`
+listens on 443 only.
 
 If you give a certificate and key, they come before the mappings. ferry
 works out which arguments are files and which are mappings, so the order
@@ -328,7 +340,7 @@ redirect   = true                          # default: true
 pid_file   = "/run/ferry/ferry.pid"        # default: none
 
 [[proxy]]
-listen   = 443
+listen   = "80/443"                        # 443, plus 80 redirecting to it
 upstream = 3000
 
 [[proxy]]
@@ -505,7 +517,8 @@ Load it with `launchctl load ~/Library/LaunchAgents/local.ferry.plist`.
 | Bind address                     | all interfaces, IPv4 + IPv6            | `ADDR:PORT:UPSTREAM`, `listen = "ADDR:PORT"`  |
 | Upstream host                    | `localhost` (`::1` and `127.0.0.1`)    | `PORT:HOST:PORT`                              |
 | Certificate                      | issued from ferry's local CA           | `CERT KEY`, `cert`/`key`                      |
-| HTTP → HTTPS redirect            | on                                     | `--no-redirect`, `redirect = false`           |
+| HTTP → HTTPS on the same port    | redirect                               | `--no-redirect`, `redirect = false`           |
+| Plain HTTP port (e.g. 80 → 443)  | none                                   | `80/443:UPSTREAM`, `listen = "80/443"`        |
 | Body size limit                  | none                                   | `--max-body`, `max_body`                      |
 | Access log                       | stdout, `combined`                     | `--access-log`, `--log-format`, `-q`          |
 | Error log                        | stderr                                 | `--error-log`                                 |

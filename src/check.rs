@@ -76,12 +76,15 @@ pub fn check(config: &Config) -> Report {
                 )),
             }
         }
-        if let Err(e) = net::bind(l.mapping.bind, l.mapping.port) {
-            report.warnings.push(net::bind_error(
-                &l.mapping.listen_display(),
-                l.mapping.port,
-                &e,
-            ));
+        let m = &l.mapping;
+        for port in std::iter::once(m.port).chain(m.redirect_from) {
+            if let Err(e) = net::bind(m.bind, port) {
+                report.warnings.push(net::bind_error(
+                    &crate::mapping::listen_display(m.bind, port),
+                    port,
+                    &e,
+                ));
+            }
         }
     }
 

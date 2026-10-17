@@ -51,8 +51,15 @@ where
 is
 .I port
 or
-.IB address : port
-and
+.IB address : port \fR,
+where
+.I port
+may be
+.IB http / https
+(such as
+.BR 80/443 )
+to also listen for plain HTTP on the first port and redirect it to HTTPS on
+the second, and
 .I upstream
 is
 .IR port ,
@@ -75,6 +82,7 @@ brackets. Without an address, ferry listens on all interfaces, IPv4 and IPv6.
 6005:10.0.0.5:6006       forward to another host
 6005:/run/app.sock       forward to a Unix socket
 [::1]:6005:[::1]:6006    IPv6 on both sides
+80/443:6006              https on 443, http on 80 redirecting to it
 .fi
 .RE
 .PP
@@ -156,8 +164,10 @@ with 413 Payload Too Large. Accepts suffixes K, M and G (binary multiples).
 The default is no limit.
 .TP
 .B \-\-no\-redirect
-Do not redirect plain HTTP to HTTPS. Plain HTTP sent to an HTTPS port gets a
-400 response explaining the port expects HTTPS, and port 80 is not used.
+Do not redirect plain HTTP sent to an HTTPS port; it gets a 400 response
+explaining the port expects HTTPS instead. Plain HTTP ports named with
+.IB http / https
+still redirect: that is all they do.
 .TP
 .BR \-d ", " \-\-daemonize
 Run in the background. Not allowed with a command after
@@ -214,7 +224,7 @@ redirect = true
 pid_file = "/run/ferry/ferry.pid"
 
 [[proxy]]
-listen = 443                      # or "127.0.0.1:443", "[::1]:443"
+listen = "80/443"                 # or 443, "127.0.0.1:443", "[::1]:443"
 upstream = 3000                   # or "host:port", "http://host:port",
                                   # or "/run/app.sock"
 
@@ -330,9 +340,11 @@ and adds an
 client sent one. HTTP/1.1 upgrades such as WebSockets are passed through.
 .PP
 Plain HTTP sent to an HTTPS port is redirected (308) to the same URL over
-HTTPS. If a mapping listens on port 443 and none uses port 80, ferry also
-listens on port 80 and redirects to HTTPS; if it cannot bind port 80, it
-warns and continues.
+HTTPS. A mapping such as
+.B 80/443:3000
+also listens for plain HTTP on port 80 and redirects every request to the
+same URL over HTTPS on 443; port 80 never serves the application. ferry only
+listens on the ports it is given.
 .PP
 When an upstream cannot be reached, ferry answers 502 with a short
 explanation (HTML for browsers, plain text otherwise), or 504 if connecting

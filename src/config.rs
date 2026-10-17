@@ -194,15 +194,14 @@ impl Config {
         }
 
         for (i, a) in config.listeners.iter().enumerate() {
-            if let Some(b) = config.listeners[..i]
+            if let Some((b, port)) = config.listeners[..i]
                 .iter()
-                .find(|b| b.mapping.conflicts_with(&a.mapping))
+                .find_map(|b| Some((b, b.mapping.conflict(&a.mapping)?)))
             {
                 errors.push(format!(
-                    "`{}` and `{}` both listen on port {}",
+                    "`{}` and `{}` both listen on port {port}",
                     b.mapping.listen_display(),
                     a.mapping.listen_display(),
-                    a.mapping.port
                 ));
             }
         }
@@ -295,9 +294,9 @@ impl Config {
                     let (cert, key) = cert_key_out(l.cert_key.as_ref());
                     let m = &l.mapping;
                     OutProxy {
-                        listen: match m.bind {
-                            None => toml::Value::Integer(m.port.into()),
-                            Some(_) => toml::Value::String(m.listen_display()),
+                        listen: match (m.bind, m.redirect_from) {
+                            (None, None) => toml::Value::Integer(m.port.into()),
+                            _ => toml::Value::String(m.listen_display()),
                         },
                         upstream: match &m.upstream {
                             Upstream::Tcp { host, port }
@@ -475,7 +474,11 @@ fn load_file(path: &Path) -> Result<Config, Vec<String>> {
         let listen = value_str(proxy.listen.get_ref()).and_then(|s| mapping::parse_listen(&s));
         let upstream =
             value_str(proxy.upstream.get_ref()).and_then(|s| mapping::parse_upstream(&s));
-        let (bind, port) = match listen {
+        let mapping::Listen {
+            bind,
+            port,
+            redirect_from,
+        } = match listen {
             Ok(l) => l,
             Err(e) => {
                 errors.push(format!("{}: listen: {e}", at(proxy.listen.span())));
@@ -510,6 +513,7 @@ fn load_file(path: &Path) -> Result<Config, Vec<String>> {
             mapping: Mapping {
                 bind,
                 port,
+                redirect_from,
                 upstream,
             },
             cert_key,
@@ -929,7 +933,7 @@ idle_timeout = "2m"
 qr_code = false
 ca_name_constraints = false
 "#,
-            &["127.0.0.1:8000:9000", "8001:app:80"],
+            &["127.0.0.1:8000:9000", "8001:app:80", "8080/8443:9001"],
         );
         let original = original.unwrap();
         let printed = original.to_toml();

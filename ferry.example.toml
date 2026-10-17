@@ -29,11 +29,12 @@
 # (Running in the background is -d, on the command line only.)
 # pid_file = "/run/ferry/ferry.pid"
 
-# Redirect plain HTTP to HTTPS (on the same port, and 80 -> 443). Default: true.
+# Redirect plain HTTP sent to an HTTPS port to HTTPS. Default: true.
+# (A plain HTTP port that redirects, like 80 -> 443, is listen = "80/443".)
 # redirect = true
 
 [[proxy]]
-listen = 6005              # or "127.0.0.1:6005", "[::1]:6005"
+listen = 6005              # or "127.0.0.1:6005", "[::1]:6005", "80/443"
 upstream = 6006            # or "10.0.0.5:6006", "http://app:8080", "/run/app.sock"
 
 # [[proxy]]

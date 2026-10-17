@@ -37,11 +37,14 @@ pub type ListenKey = (Option<IpAddr>, u16);
 
 /// How a listener behaves. Swapped atomically on reload.
 pub struct ListenerState {
-    /// `None` for the plain-HTTP listeners: port 80 redirecting to 443, and
-    /// the page for trusting the local CA.
+    /// `None` for the plain-HTTP listeners: the HTTP side of an `80/443`
+    /// mapping, and the page for trusting the local CA.
     https: Option<Https>,
     log: Arc<AccessLogger>,
     redirect: bool,
+    /// For the HTTP side of an `80/443` mapping: the HTTPS port to redirect
+    /// to. `None` redirects to the same port.
+    redirect_to: Option<u16>,
     /// Set on the listener that serves the page for trusting the local CA.
     trust_page: Option<Arc<trust::Page>>,
     handshake_timeout: Duration,
@@ -58,7 +61,7 @@ struct Https {
 pub enum Kind {
     /// HTTPS for a mapping.
     App,
-    /// Plain HTTP on port 80, redirecting to 443.
+    /// The plain HTTP side of an `80/443` mapping, redirecting to HTTPS.
     Redirect,
     /// The page for trusting the local CA, over plain HTTP on a port the OS
     /// picks (port 0 in the key), so ferry never serves anything of its own
@@ -72,8 +75,8 @@ pub struct ListenerSpec {
     pub key: ListenKey,
     pub listen: String,
     pub state: ListenerState,
-    /// Only app listeners are required; if another can't be bound, ferry
-    /// warns and carries on without it.
+    /// Only the trust page is optional; if it can't be bound, ferry warns
+    /// and carries on without it.
     pub kind: Kind,
 }
 
@@ -160,6 +163,7 @@ pub fn build(config: &Config) -> Result<Plan, Vec<String>> {
                 }),
                 log: log.clone(),
                 redirect: config.redirect,
+                redirect_to: None,
                 trust_page: None,
                 handshake_timeout: adv.handshake_timeout,
                 idle_timeout: adv.idle_timeout,
@@ -168,31 +172,27 @@ pub fn build(config: &Config) -> Result<Plan, Vec<String>> {
         });
     }
 
-    // Port 80 redirects to 443, if 443 is served and 80 isn't otherwise used.
-    let uses = |port| {
-        config
-            .listeners
-            .iter()
-            .filter(move |l| l.mapping.port == port)
-    };
-    if config.redirect && uses(80).next().is_none() {
-        let mut binds: Vec<Option<IpAddr>> = uses(443).map(|l| l.mapping.bind).collect();
-        binds.dedup();
-        for bind in binds {
-            listeners.push(ListenerSpec {
-                key: (bind, 80),
-                listen: crate::mapping::listen_display(bind, 80),
-                state: ListenerState {
-                    https: None,
-                    log: log.clone(),
-                    redirect: true,
-                    trust_page: None,
-                    handshake_timeout: config.advanced.handshake_timeout,
-                    idle_timeout: config.advanced.idle_timeout,
-                },
-                kind: Kind::Redirect,
-            });
-        }
+    // `80/443` mappings: plain HTTP on the first port, redirecting to the
+    // second.
+    for l in &config.listeners {
+        let m = &l.mapping;
+        let Some(from) = m.redirect_from else {
+            continue;
+        };
+        listeners.push(ListenerSpec {
+            key: (m.bind, from),
+            listen: crate::mapping::listen_display(m.bind, from),
+            state: ListenerState {
+                https: None,
+                log: log.clone(),
+                redirect: true,
+                redirect_to: Some(m.port),
+                trust_page: None,
+                handshake_timeout: config.advanced.handshake_timeout,
+                idle_timeout: config.advanced.idle_timeout,
+            },
+            kind: Kind::Redirect,
+        });
     }
 
     // The trust page listens wherever phones can reach the apps: everywhere,
@@ -211,6 +211,7 @@ pub fn build(config: &Config) -> Result<Plan, Vec<String>> {
                 https: None,
                 log: log.clone(),
                 redirect: false,
+                redirect_to: None,
                 trust_page: Some(page),
                 handshake_timeout: config.advanced.handshake_timeout,
                 idle_timeout: config.advanced.idle_timeout,
@@ -253,10 +254,6 @@ pub fn bind<'a>(
             Ok(s) => {
                 sockets.insert(spec.key, s);
             }
-            Err(e) if spec.kind == Kind::Redirect => warnings.push(format!(
-                "not redirecting port 80 to 443: {}",
-                net::bind_error(&spec.listen, spec.key.1, &e)
-            )),
             Err(e) if spec.kind == Kind::Trust => warnings.push(format!(
                 "can't serve the page for trusting ferry's local CA: {e}"
             )),
@@ -313,8 +310,8 @@ impl Server {
             }
             let Some(socket) = sockets.remove(&spec.key) else {
                 assert!(
-                    spec.kind != Kind::App,
-                    "a socket is bound for every app listener"
+                    spec.kind == Kind::Trust,
+                    "a socket is bound for every required listener"
                 );
                 continue;
             };
@@ -403,11 +400,11 @@ async fn handle_connection(
     }
 
     let Some(https) = &state.https else {
-        serve_plain(stream, peer, &state, true).await;
+        serve_plain(stream, peer, &state).await;
         return;
     };
     if first[0] != TLS_HANDSHAKE {
-        serve_plain(stream, peer, &state, false).await;
+        serve_plain(stream, peer, &state).await;
         return;
     }
 
@@ -478,15 +475,9 @@ async fn handle_connection(
 
 /// Answers plain HTTP: the page for trusting the local CA on its own port,
 /// otherwise a redirect to HTTPS or a short explanation.
-/// `default_port` is for the port 80 listener: redirect to the default
-/// HTTPS port rather than the same one.
-async fn serve_plain(
-    stream: TcpStream,
-    peer: SocketAddr,
-    state: &ListenerState,
-    default_port: bool,
-) {
+async fn serve_plain(stream: TcpStream, peer: SocketAddr, state: &ListenerState) {
     let redirect = state.redirect;
+    let redirect_to = state.redirect_to;
     let log = state.log.clone();
     let trust_page = state.trust_page.clone();
     let service = service_fn(move |req: Request<Incoming>| {
@@ -496,7 +487,7 @@ async fn serve_plain(
             let pending = Pending::new(&req, peer);
             let (resp, upstream) = match trust_page {
                 Some(page) => (page.respond(&req), "ferry"),
-                None => (redirect_response(&req, redirect, default_port), "redirect"),
+                None => (redirect_response(&req, redirect, redirect_to), "redirect"),
             };
             let id = HeaderValue::from_static("-");
             Ok::<_, Infallible>(pending.finish(resp, log, &id, upstream.into()))
@@ -510,16 +501,21 @@ async fn serve_plain(
         .await;
 }
 
-/// Redirects a plain HTTP request to the same URL over HTTPS. With
-/// `default_port`, the redirect drops the port (for `:80` → `:443`).
-pub fn redirect_response<B>(req: &Request<B>, enabled: bool, default_port: bool) -> Response<Body> {
+/// Redirects a plain HTTP request to the same URL over HTTPS: on the same
+/// port, or with `to_port` on that one (`:80` → `:443`, which URLs leave out).
+pub fn redirect_response<B>(
+    req: &Request<B>,
+    enabled: bool,
+    to_port: Option<u16>,
+) -> Response<Body> {
     let host = req
         .headers()
         .get(HOST)
         .and_then(|h| h.to_str().ok())
-        .map(|h| match default_port {
-            true => strip_port(h),
-            false => h,
+        .map(|h| match to_port {
+            None => h.to_string(),
+            Some(443) => strip_port(h).to_string(),
+            Some(port) => format!("{}:{port}", strip_port(h)),
         });
     let path = req
         .uri()
@@ -662,34 +658,32 @@ mod tests {
     }
 
     #[test]
-    fn port_80_redirects_when_443_is_served() {
+    fn only_the_ports_named_are_opened() {
+        assert_eq!(keys(&["443:3000"]), vec![((None, 443), false)]);
         assert_eq!(
-            keys(&["443:3000"]),
+            keys(&["80/443:3000"]),
             vec![((None, 443), false), ((None, 80), true)]
         );
         let lo = Some("127.0.0.1".parse().unwrap());
         assert_eq!(
-            keys(&["127.0.0.1:443:3000"]),
-            vec![((lo, 443), false), ((lo, 80), true)]
+            keys(&["127.0.0.1:8080/8443:3000"]),
+            vec![((lo, 8443), false), ((lo, 8080), true)]
         );
-        assert_eq!(keys(&["6005:3000"]), vec![((None, 6005), false)]);
+        // --no-redirect is about plain HTTP on HTTPS ports; a redirect port
+        // asked for by name still redirects.
         assert_eq!(
-            keys(&["443:3000", "80:3001"]),
-            vec![((None, 443), false), ((None, 80), false)]
-        );
-        assert_eq!(
-            keys(&["--no-redirect", "443:3000"]),
-            vec![((None, 443), false)]
+            keys(&["--no-redirect", "80/443:3000"]),
+            vec![((None, 443), false), ((None, 80), true)]
         );
     }
 
-    fn redirect(host: &str, path: &str, default_port: bool) -> (u16, Option<String>) {
+    fn redirect(host: &str, path: &str, to_port: Option<u16>) -> (u16, Option<String>) {
         let req = Request::builder()
             .uri(path)
             .header(HOST, host)
             .body(())
             .unwrap();
-        let resp = redirect_response(&req, true, default_port);
+        let resp = redirect_response(&req, true, to_port);
         let location = resp
             .headers()
             .get(LOCATION)
@@ -700,16 +694,24 @@ mod tests {
     #[test]
     fn redirect_locations() {
         assert_eq!(
-            redirect("localhost:6005", "/a?b", false),
+            redirect("localhost:6005", "/a?b", None),
             (308, Some("https://localhost:6005/a?b".into()))
         );
         assert_eq!(
-            redirect("example.com", "/", true),
+            redirect("example.com", "/", Some(443)),
             (308, Some("https://example.com/".into()))
         );
         assert_eq!(
-            redirect("example.com:80", "/x", true),
+            redirect("example.com:80", "/x", Some(443)),
             (308, Some("https://example.com/x".into()))
+        );
+        assert_eq!(
+            redirect("localhost:8080", "/x", Some(8443)),
+            (308, Some("https://localhost:8443/x".into()))
+        );
+        assert_eq!(
+            redirect("[::1]:8080", "/", Some(8443)),
+            (308, Some("https://[::1]:8443/".into()))
         );
     }
 

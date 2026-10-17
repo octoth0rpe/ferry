@@ -35,12 +35,15 @@ pub fn render(config: &Config, plan: &Plan, color: bool, qr: bool) -> String {
             let _ = writeln!(out, "  {dim}{url}{reset}");
         }
     }
-    for spec in plan.listeners.iter().filter(|s| s.kind == Kind::Redirect) {
-        let _ = writeln!(
-            out,
-            "  {dim}http://*:{} redirects to https{reset}",
-            spec.key.1
-        );
+    for m in config.listeners.iter().map(|l| &l.mapping) {
+        if let Some(from) = m.redirect_from {
+            let _ = writeln!(
+                out,
+                "  {dim}http on {} redirects to https on {}{reset}",
+                crate::mapping::listen_display(m.bind, from),
+                m.port
+            );
+        }
     }
 
     let mut certs: Vec<String> = config
