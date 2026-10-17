@@ -88,18 +88,17 @@ fn trust_section(plan: &Plan, ca: &LocalCa, color: bool) -> String {
     let _ = writeln!(out, "    {fp1}");
     let _ = writeln!(out, "    {fp2}");
     if let Some((port, lan)) = trust_listener(plan) {
+        // The LAN address works here and from other devices; localhost only
+        // when there's nothing else.
+        let host = match lan_ip().filter(|_| lan) {
+            Some(ip) => ip.to_string(),
+            None => "localhost".into(),
+        };
         let _ = writeln!(
             out,
-            "  NOTE: Browsers will warn until you trust the CA. Trust it at:"
+            "  NOTE: Browsers will warn until you trust the CA; see {}",
+            trust_page(&host, port)
         );
-        let mut pages = vec![(trust_page("localhost", port), "this computer")];
-        if lan && let Some(ip) = lan_ip() {
-            pages.push((trust_page(&ip.to_string(), port), "other devices"));
-        }
-        let width = pages.iter().map(|(url, _)| url.len()).max().unwrap_or(0);
-        for (url, label) in pages {
-            let _ = writeln!(out, "    {url:width$}    ({label})");
-        }
     }
     out
 }
@@ -146,6 +145,7 @@ fn phone_section(config: &Config, plan: &Plan, color: bool, qr: bool) -> String 
                     .map(|line| (line.to_string(), line.chars().count())),
             )
             .collect();
+        out.push('\n');
         let qr = panel("On a phone, scan this first:", page, color);
         for line in rows(&[qr, steps]).concat() {
             let _ = writeln!(out, "  {line}");
@@ -177,24 +177,11 @@ fn phone_section(config: &Config, plan: &Plan, color: bool, qr: bool) -> String 
     out
 }
 
-/// An app's QR code with its URL centred above it.
+/// An app's QR code with its URL below it.
 fn app_panel(url: &str, color: bool) -> Panel {
-    let code = qr_code(url, color);
-    let url_width = url.chars().count();
-    let width = code
-        .iter()
-        .map(|(_, w)| *w)
-        .max()
-        .unwrap_or(0)
-        .max(url_width);
-    let centred = |(text, w): (String, usize)| {
-        let pad = (width - w) / 2;
-        (format!("{}{text}", " ".repeat(pad)), w + pad)
-    };
-    std::iter::once((url.to_string(), url_width))
-        .chain(code)
-        .map(centred)
-        .collect()
+    let mut lines = qr_code(url, color);
+    lines.push((url.to_string(), url.chars().count()));
+    lines
 }
 
 /// One labelled QR code: its lines, each with its width on screen.
@@ -406,15 +393,11 @@ mod tests {
     }
 
     #[test]
-    fn app_panels_centre_the_url_over_the_code() {
+    fn app_panels_put_the_url_below_the_code() {
         let url = "https://192.168.1.20:6005";
         let panel = app_panel(url, false);
-        let qr_width = panel[1].1;
-        assert!(qr_width > url.len());
-        let pad = (qr_width - url.len()) / 2;
-        assert_eq!(panel[0].0, format!("{}{url}", " ".repeat(pad)));
-        assert_eq!(panel[0].1, url.len() + pad);
-        assert!(panel[1..].iter().all(|(_, w)| *w == qr_width));
+        assert_eq!(panel.last().unwrap(), &(url.to_string(), url.len()));
+        assert!(panel[0].0.starts_with('█'), "{panel:?}");
     }
 
     #[test]
