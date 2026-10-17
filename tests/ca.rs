@@ -35,7 +35,7 @@ async fn default_certificate_chains_to_the_local_ca() {
             .unwrap_or_else(|e| panic!("{host}: {e:?}"));
         assert_eq!(resp.text().await.unwrap(), "hello from upstream");
     }
-    let err = ferry.wait_for_stderr("Browsers will warn until you trust the CA");
+    let err = ferry.wait_for_stderr("(this computer)");
     assert!(
         err.contains("created ferry's local CA (none existed yet)"),
         "{err}"
@@ -45,13 +45,12 @@ async fn default_certificate_chains_to_the_local_ca() {
 
 /// The trust page's address on this machine, from the banner.
 fn trust_url(ferry: &Ferry) -> String {
-    let err = ferry.wait_for_stderr("Browsers will warn until you trust the CA");
-    let start = err
-        .find("see http://localhost:")
-        .unwrap_or_else(|| panic!("{err}"))
-        + 4;
-    let url = &err[start..];
-    url[..url.find(char::is_whitespace).unwrap()].to_string()
+    let err = ferry.wait_for_stderr("(this computer)");
+    let line = err
+        .lines()
+        .find(|l| l.ends_with("(this computer)"))
+        .unwrap_or_else(|| panic!("{err}"));
+    line.split_whitespace().next().unwrap().to_string()
 }
 
 #[tokio::test]
@@ -160,7 +159,7 @@ async fn root_is_kept_and_server_certificate_reissued_across_restarts() {
         std::fs::read(ferry.data_dir().join("server.pem")).unwrap(),
         server
     );
-    let err = ferry.wait_for_stderr("Browsers will warn until you trust the CA");
+    let err = ferry.wait_for_stderr("(this computer)");
     assert!(!err.contains("created ferry's local CA"), "{err}");
     assert!(!err.contains("now uses a local CA"), "{err}");
 }
@@ -174,7 +173,7 @@ async fn upgrading_from_the_self_signed_certificate_says_so() {
 
     let port = free_port();
     let ferry = Ferry::start_in(home, &[&format!("{port}:1")], port);
-    let err = ferry.wait_for_stderr("Browsers will warn until you trust the CA");
+    let err = ferry.wait_for_stderr("(this computer)");
     assert!(
         err.contains("ferry now uses a local CA instead of a self-signed certificate"),
         "{err}"

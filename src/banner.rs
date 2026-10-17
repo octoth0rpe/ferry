@@ -87,24 +87,36 @@ fn trust_section(plan: &Plan, ca: &LocalCa, color: bool) -> String {
     let _ = writeln!(out, "  CA fingerprint (SHA-256):");
     let _ = writeln!(out, "    {fp1}");
     let _ = writeln!(out, "    {fp2}");
-    if let Some((port, _)) = trust_listener(plan) {
+    if let Some((port, lan)) = trust_listener(plan) {
         let _ = writeln!(
             out,
-            "  NOTE: Browsers will warn until you trust the CA; see {}",
-            trust_page("localhost", port)
+            "  NOTE: Browsers will warn until you trust the CA. Trust it at:"
         );
+        let mut pages = vec![(trust_page("localhost", port), "this computer")];
+        if lan && let Some(ip) = lan_ip() {
+            pages.push((trust_page(&ip.to_string(), port), "other devices"));
+        }
+        let width = pages.iter().map(|(url, _)| url.len()).max().unwrap_or(0);
+        for (url, label) in pages {
+            let _ = writeln!(out, "    {url:width$}    ({label})");
+        }
     }
     out
+}
+
+/// The address other devices on the network most likely reach this machine
+/// at.
+fn lan_ip() -> Option<IpAddr> {
+    net::lan_ips_best_first()
+        .into_iter()
+        .find(|ip| ip.is_ipv4())
 }
 
 /// What a phone on the same network needs: the page for trusting
 /// the local CA, with the steps in brief, and each app's address. With `qr`,
 /// as QR codes side by side.
 fn phone_section(config: &Config, plan: &Plan, color: bool, qr: bool) -> String {
-    let Some(ip) = net::lan_ips_best_first()
-        .into_iter()
-        .find(|ip| ip.is_ipv4())
-    else {
+    let Some(ip) = lan_ip() else {
         return String::new();
     };
     let reachable = |bind: Option<IpAddr>| all_interfaces(bind) || bind == Some(ip);

@@ -17,7 +17,9 @@ ferry 0.1.0
   CA fingerprint (SHA-256):
     03:0B:A0:99:DC:39:A1:83:8F:C7:78:3B:B2:1A:DB:BB
     62:15:FB:C0:95:2B:0B:AF:8F:B7:F8:67:E0:EC:72:DA
-  NOTE: Browsers will warn until you trust the CA; see http://localhost:52814/
+  NOTE: Browsers will warn until you trust the CA. Trust it at:
+    http://localhost:52814/       (this computer)
+    http://192.168.1.20:52814/    (other devices)
   On a phone, scan this first:
   █████████████████████████████████    Trust ferry's CA, once per phone:
   ██ ▄▄▄▄▄ █▄▄▀▄█  █▄█▀▄▄█ ▄▄▄▄▄ ██    iPhone
