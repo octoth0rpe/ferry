@@ -18,7 +18,7 @@ ferry 5273:5173 -- npm run dev
 ```
 
 ```
-ferry 0.1.0
+ferry 0.2.0
   https://localhost:5273  →  http://localhost:5173
   https://192.168.1.20:5273
   cert: ferry local CA (~/Library/Application Support/ferry/ca.pem), SHA-256 03:0B:A0…EC:72:DA
