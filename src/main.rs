@@ -1,6 +1,7 @@
 mod banner;
 mod ca;
 mod check;
+mod child;
 mod cli;
 mod config;
 mod daemon;
@@ -20,6 +21,7 @@ mod watch;
 use std::process::ExitCode;
 
 use clap::Parser;
+use nix::sys::signal::Signal;
 use tokio::signal::unix::{SignalKind, signal};
 
 use std::path::{Path, PathBuf};
@@ -38,6 +40,12 @@ fn main() -> ExitCode {
     if let Some(shell) = cli.completions {
         cli::Cli::print_completions(shell);
         return ExitCode::SUCCESS;
+    }
+    if cli.daemonize && !cli.command.is_empty() {
+        return fail(vec![format!(
+            "can't run `{}` with -d: running a command needs ferry in the foreground",
+            child::display(&cli.command)
+        )]);
     }
     // Relative paths on the command line are resolved against this, even
     // after daemonizing changes directory or on a later reload.
@@ -102,7 +110,19 @@ fn main() -> ExitCode {
             ca.paths.root.cert.display()
         );
     }
-    banner::show(&config, &plan, cli.daemonize);
+    // With a command, the banner waits until the app is listening, so it
+    // lands below the app's own startup output (and survives a dev server
+    // clearing the screen).
+    let banner = match cli.command.is_empty() {
+        true => {
+            banner::show(&config, &plan, cli.daemonize);
+            None
+        }
+        false => {
+            banner::log_listeners(&config);
+            banner::text(&config, &plan, false)
+        }
+    };
 
     let write_pid = || pid_path.as_deref().map(daemon::write_pid_file).transpose();
     let _pid_file = if cli.daemonize {
@@ -128,7 +148,14 @@ fn main() -> ExitCode {
         .enable_all()
         .build()
         .expect("can start the tokio runtime");
-    runtime.block_on(run(cli, cwd, config, plan, sockets))
+    runtime.block_on(run(cli, cwd, config, plan, sockets, banner))
+}
+
+/// Why the main loop ended.
+enum Stop {
+    Signal(Signal),
+    /// The command ferry was running exited.
+    Exited(std::io::Result<std::process::ExitStatus>),
 }
 
 async fn run(
@@ -137,6 +164,7 @@ async fn run(
     config: Config,
     plan: server::Plan,
     sockets: server::Sockets,
+    banner: Option<String>,
 ) -> ExitCode {
     // Handle signals before serving, so none arrive unhandled.
     let mut sigterm = signal(SignalKind::terminate()).expect("can install SIGTERM handler");
@@ -154,6 +182,34 @@ async fn run(
         return fail(vec![e.to_string()]);
     }
 
+    let mut child = match cli.command.is_empty() {
+        true => None,
+        false => match child::spawn(&cli.command) {
+            Ok(c) => Some(c),
+            Err(e) => return fail(vec![e]),
+        },
+    };
+    if child.is_some() {
+        let upstreams: Vec<_> = config
+            .listeners
+            .iter()
+            .map(|l| l.mapping.upstream.clone())
+            .collect();
+        tokio::spawn(async move {
+            let missing = child::wait_for_upstreams(&upstreams, child::STARTUP_WAIT).await;
+            child::started();
+            if let Some(banner) = banner {
+                eprint!("{banner}");
+            }
+            for upstream in missing {
+                tracing::warn!(
+                    "nothing is listening on {upstream} after {:?}; is that where your app listens?",
+                    child::STARTUP_WAIT
+                );
+            }
+        });
+    }
+
     let mut watcher = watch::FileWatcher::new();
     watcher.set_files(watch::files(&config));
 
@@ -163,10 +219,11 @@ async fn run(
     let mut reissue_check = tokio::time::interval(Duration::from_secs(30));
     reissue_check.tick().await;
 
-    loop {
+    let stop = loop {
         let reason = tokio::select! {
-            _ = sigterm.recv() => break,
-            _ = sigint.recv() => break,
+            _ = sigterm.recv() => break Stop::Signal(Signal::SIGTERM),
+            _ = sigint.recv() => break Stop::Signal(Signal::SIGINT),
+            status = wait_for(&mut child) => break Stop::Exited(status),
             _ = sighup.recv() => "SIGHUP".to_string(),
             _ = sigusr1.recv() => {
                 reopen_logs(&access_log);
@@ -205,15 +262,48 @@ async fn run(
                 );
             }
         }
-    }
+    };
+
+    let grace = config.advanced.shutdown_grace;
+    let code = match (stop, &mut child) {
+        (Stop::Exited(status), _) => {
+            child::started();
+            let command = child::display(&cli.command);
+            match status {
+                Ok(status) => {
+                    tracing::info!("`{command}` exited ({status})");
+                    child::exit_code(status)
+                }
+                Err(e) => {
+                    tracing::error!("can't tell how `{command}` exited: {e}");
+                    1
+                }
+            }
+        }
+        (Stop::Signal(sig), Some(c)) => {
+            child::forward(c, sig);
+            child::stop(c, grace).await.map_or(1, child::exit_code)
+        }
+        (Stop::Signal(_), None) => 0,
+    };
 
     tracing::info!("shutting down");
     server
-        .shutdown(config.advanced.shutdown_grace, async {
+        .shutdown(grace, async {
             sigint.recv().await;
         })
         .await;
-    ExitCode::SUCCESS
+    ExitCode::from(code)
+}
+
+/// Waits for the command ferry runs to exit; forever if there isn't one.
+async fn wait_for(
+    child: &mut Option<tokio::process::Child>,
+) -> std::io::Result<std::process::ExitStatus> {
+    match child {
+        Some(child) => child.wait().await,
+        None => std::future::pending().await,
+    }
 }
 
 /// The names the local CA's server certificate was issued for and when it

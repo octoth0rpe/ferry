@@ -15,14 +15,14 @@ http = "1.5.0"
 http-body-util = "0.1.5"
 hyper = { version = "1.12.0", features = ["http1", "http2", "server", "client"] }
 hyper-util = { version = "0.1.21", features = ["tokio", "server-auto", "client-legacy", "http1", "http2"] }
-nix = { version = "0.31.3", features = ["net", "hostname", "signal", "process", "fs"] }
+nix = { version = "0.31.3", features = ["net", "hostname", "signal", "process", "fs", "term"] }
 qrcodegen = "1.8.0"
 rcgen = { version = "0.14.10", default-features = false, features = ["ring", "pem"] }
 ring = "0.17.14"
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 serde = { version = "1.0.229", features = ["derive"] }
 socket2 = "0.6.5"
-tokio = { version = "1.53.3", features = ["rt-multi-thread", "net", "io-util", "signal", "time", "sync", "macros"] }
+tokio = { version = "1.53.3", features = ["rt-multi-thread", "net", "io-util", "signal", "time", "sync", "macros", "process"] }
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12", "logging"] }
 tokio-util = { version = "0.7.20", features = ["rt"] }
 toml = "1.1.8"

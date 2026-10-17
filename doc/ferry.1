@@ -7,12 +7,16 @@ ferry \- a very simple HTTPS reverse proxy
 .RI [ cert
 .IR key ]
 .IR mapping ...
+.RB [ \-\-
+.IR command ...]
 .br
 .B ferry
 .B \-c
 .I file
 .RI [ options ]
 .RI [ mapping ...]
+.RB [ \-\-
+.IR command ...]
 .br
 .B ferry \-t
 .RB [ \-c
@@ -77,6 +81,21 @@ brackets. Without an address, ferry listens on all interfaces, IPv4 and IPv6.
 Arguments that look like mappings (containing
 .B :
 or a bare number) are mappings; the rest are the certificate and key.
+.TP
+.BI \-\- " command" \fR...
+Run
+.I command
+alongside ferry, typically a development server:
+.B ferry 6005:5173 \-\- npm run dev .
+The command shares ferry's terminal (stdin, stdout and stderr). Requests
+that arrive before every upstream accepts connections are held, for up to 30
+seconds, instead of getting an error page, and the banner is printed once
+they all do, below the command's own startup output. SIGTERM is passed on to
+the command, and SIGINT too unless it came from the terminal (where the
+command gets it directly). ferry exits when the command does, with its exit
+status. Not allowed with
+.BR \-d .
+Command line only.
 .SH OPTIONS
 .TP
 .BR \-c ", " \-\-config " " \fIfile\fR
@@ -141,7 +160,8 @@ Do not redirect plain HTTP to HTTPS. Plain HTTP sent to an HTTPS port gets a
 400 response explaining the port expects HTTPS, and port 80 is not used.
 .TP
 .BR \-d ", " \-\-daemonize
-Run in the background. ferry checks the configuration, loads certificates and
+Run in the background. Not allowed with a command after
+.BR \-\- . ferry checks the configuration, loads certificates and
 binds its ports first, so errors are still reported in the terminal and in
 the exit status. The banner is printed before ferry detaches. Logs that would
 go to the terminal are discarded, and ferry warns about this.
@@ -352,7 +372,9 @@ Where the local CA is kept.
 .SH EXIT STATUS
 0 on a clean shutdown or a successful
 .BR \-t ;
-1 on errors in the configuration or at startup; 2 for invalid usage.
+1 on errors in the configuration or at startup; 2 for invalid usage. When
+ferry runs a command, it exits with the command's status: its exit code, or
+128 plus the number of the signal that killed it.
 .SH EXAMPLES
 HTTPS for a development server, with a certificate from ferry's local CA:
 .PP

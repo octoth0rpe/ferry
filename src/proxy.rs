@@ -95,6 +95,7 @@ pub async fn handle(
     let html = wants_html(req.headers());
     let request_id = request_id(req.headers());
 
+    crate::child::wait_until_started().await;
     let mut resp = forward(route, req, peer, &request_id, html).await;
     resp.headers_mut().insert(X_REQUEST_ID, request_id.clone());
     pending.finish(

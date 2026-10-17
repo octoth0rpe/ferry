@@ -47,6 +47,11 @@ enable it once per clone with `git config core.hooksPath .githooks` (needs
   can be a public FQDN) unless `[advanced] ca_name_constraints = false`.
   Names a root can't cover are dropped from the server cert; IPs with a
   warning.
+- `child.rs`: `ferry MAPPING -- COMMAND` (CLI only, foreground only). Spawns
+  the command, holds requests (`wait_until_started`, a global gate) until
+  every upstream accepts connections, forwards SIGTERM (SIGINT only when not
+  from the terminal), exits with its status. The banner is printed once the
+  upstreams are up.
 - `trust.rs`: the `/.ferry/` page served over plain HTTP on CA ports (the
   root, per-platform trust steps, desktop and NSS `certutil` commands).
 - `der.rs`: the few certificate fields ferry reads (notAfter, issuer ==

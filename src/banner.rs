@@ -217,13 +217,26 @@ fn tilde(path: &Path) -> String {
 /// error log when it isn't the terminal (so log files record them too). The
 /// QR code is only for people watching a terminal, not for background mode.
 pub fn show(config: &Config, plan: &Plan, daemonize: bool) {
-    let stderr_is_log = config.error_log == ErrorLog::Stderr;
-    if !config.quiet {
-        let tty = std::io::stderr().is_terminal();
-        let color = tty && std::env::var_os("NO_COLOR").is_none();
-        let qr = tty && !daemonize && config.advanced.qr_code;
-        eprint!("{}", render(config, plan, color, qr));
+    if let Some(banner) = text(config, plan, daemonize) {
+        eprint!("{banner}");
     }
+    log_listeners(config);
+}
+
+/// The banner as [`show`] would print it, or `None` with `-q`.
+pub fn text(config: &Config, plan: &Plan, daemonize: bool) -> Option<String> {
+    if config.quiet {
+        return None;
+    }
+    let tty = std::io::stderr().is_terminal();
+    let color = tty && std::env::var_os("NO_COLOR").is_none();
+    let qr = tty && !daemonize && config.advanced.qr_code;
+    Some(render(config, plan, color, qr))
+}
+
+/// Logs the listeners to the error log when the banner doesn't reach it.
+pub fn log_listeners(config: &Config) {
+    let stderr_is_log = config.error_log == ErrorLog::Stderr;
     if config.quiet || !stderr_is_log {
         for l in &config.listeners {
             tracing::info!(

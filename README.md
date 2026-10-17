@@ -44,6 +44,8 @@ configure anything:
 - **HTTP/2 and HTTP/1.1** to clients, negotiated automatically.
 - **WebSockets just work**, so dev-server hot reload (Vite, Next.js, …) works
   through ferry.
+- **Runs your dev server too.** `ferry 6005:5173 -- npm run dev` starts it,
+  holds requests until it's listening, and exits when it does.
 - **Plain HTTP is redirected to HTTPS**, both on the same port
   (`http://localhost:6005` → `https://localhost:6005`) and from port 80 to
   443.
@@ -90,7 +92,31 @@ ferry 443:/run/app.sock
 
 # Everything in a config file
 ferry -c ferry.toml
+
+# Start your dev server along with ferry
+ferry 6005:5173 -- npm run dev
 ```
+
+### Running your app with ferry
+
+Everything after `--` is a command ferry runs alongside itself, usually your
+dev server:
+
+```sh
+ferry 6005:5173 -- npm run dev
+```
+
+- The command shares the terminal: you see its output, and it can read your
+  keystrokes (Vite's shortcuts work).
+- Requests that arrive before the app is listening wait for it, for up to 30
+  seconds, instead of getting an error page.
+- ferry's banner, with its URLs and QR code, appears once the app is
+  listening, below the app's own startup output, even if the dev server
+  clears the screen.
+- Ctrl-C stops both. ferry passes SIGTERM on, and exits when the command
+  does, with its exit code.
+
+It's for running in the foreground: `-d` with a command is an error.
 
 ## Mappings
 

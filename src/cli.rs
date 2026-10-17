@@ -19,8 +19,13 @@ Mappings (LISTEN:UPSTREAM):
 Without CERT and KEY, ferry issues a certificate from its own local CA.
 To trust the CA, open http://localhost:PORT/.ferry/ (plain HTTP).
 
+Everything after -- is a command to run alongside ferry, such as your dev
+server. ferry holds requests until it's listening, then shows its banner,
+and exits when it does.
+
 Examples:
   ferry 6005:6006
+  ferry 6005:5173 -- npm run dev
   ferry ./cert.pem ./key.pem 6005:6006 7001:7002
   ferry -c ferry.toml";
 
@@ -29,7 +34,7 @@ Examples:
 #[command(
     version,
     about,
-    override_usage = "ferry [OPTIONS] [<CERT> <KEY>] <MAPPING>...\n       ferry -c <FILE> [OPTIONS]",
+    override_usage = "ferry [OPTIONS] [<CERT> <KEY>] <MAPPING>... [-- <COMMAND>...]\n       ferry -c <FILE> [OPTIONS] [-- <COMMAND>...]",
     after_help = AFTER_HELP
 )]
 pub struct Cli {
@@ -80,6 +85,11 @@ pub struct Cli {
     /// Write the process id to this file (and remove it on exit)
     #[arg(long, value_name = "FILE", value_hint = ValueHint::FilePath)]
     pub pid_file: Option<PathBuf>,
+
+    /// A command to run alongside ferry, such as your dev server. ferry exits
+    /// when it does, with its exit code
+    #[arg(last = true, value_name = "COMMAND", value_hint = ValueHint::CommandWithArguments)]
+    pub command: Vec<OsString>,
 
     /// Print a shell completion script (bash, zsh, fish, elvish, powershell)
     #[arg(long, value_name = "SHELL", hide = true)]
