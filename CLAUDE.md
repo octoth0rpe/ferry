@@ -100,9 +100,20 @@ enable it once per clone with `git config core.hooksPath .githooks` (needs
 
 ## Workflow
 
-- Issues and milestones are on Gitea; use the `tea` CLI (see the gitea skill).
-- Work goes straight to `main`, with no branches or PRs. Make one commit per
-  story (or per tightly coupled group) with `Closes #N` lines, then push.
-- `planning/` is gitignored and holds local research docs, such as
-  `dependency-review.md` and `http3-research.md`. Read them, but don't commit
-  them.
+- Development happens in a private repository, the `origin` remote. Issues
+  and milestones live on its tracker; use the `tea` CLI (see the gitea
+  skill). The code is published to GitHub, the `github` remote, at releases
+  only.
+- Each milestone gets a feature branch, pushed only to `origin`. Make one
+  commit per story (or per tightly coupled group), then push the branch.
+- When the milestone is done, merge it into `main`, tag the tip (`vX.Y.Z`)
+  and push both: `git push origin main vX.Y.Z`, then
+  `git push github main vX.Y.Z`. A plain `git push github` only sends `main`
+  (`remote.github.push`); never push `--tags` there. Publishing to `github`
+  is the user's call, so ask first.
+- Urgent fixes between releases go on `main` directly and get a patch tag,
+  published the same way.
+- Every commit ends up public, so commit messages never mention issue
+  numbers (GitHub would link `#N` to its own issues) or anything else
+  private. After pushing, close each issue with `tea issues close N` and
+  comment the commit hash on it.

@@ -5,6 +5,7 @@ edition = "2024"
 rust-version = "1.88"
 description = "A very simple HTTPS reverse proxy"
 license = "MIT"
+repository = "https://github.com/octoth0rpe/ferry"
 readme = "README.md"
 
 [dependencies]

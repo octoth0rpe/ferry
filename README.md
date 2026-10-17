@@ -592,6 +592,9 @@ sudo install -m 644 doc/ferry.1 /usr/local/share/man/man1/   # then: man ferry
 
 ## Development
 
+ferry is developed in a private repository and published here at each
+release, so `main` is always the latest release, and every release is a tag.
+
 ```sh
 cargo build
 cargo test            # unit tests plus end-to-end tests that run the binary
