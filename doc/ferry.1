@@ -230,7 +230,7 @@ connect_timeout = "5s"            # connecting to an upstream
 handshake_timeout = "15s"         # TLS handshake and request headers
 idle_timeout = "90s"              # idle keep\-alive connections
 shutdown_grace = "10s"            # in\-flight requests on shutdown
-qr_code = true                    # QR code in the banner for phones
+qr_code = true                    # QR codes in the banner for phones
 ca_name_constraints = true        # limit a new local CA to local names
 .RE
 .fi
@@ -285,8 +285,9 @@ Firefox (and, on Linux, Chrome) NSS databases found. The CA certificate
 itself is at
 .IR /.ferry/ca.crt .
 Over HTTPS these paths go to the application as usual. When stderr is a
-terminal, the banner shows the CA's SHA\-256 fingerprint and a QR code for
-the page at the machine's LAN address; set
+terminal, the banner shows the CA's SHA\-256 fingerprint, a QR code for the
+page at the machine's LAN address with the steps beside it, and a QR code
+for each application; set
 .B qr_code = false
 in
 .B [advanced]

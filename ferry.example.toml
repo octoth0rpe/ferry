@@ -48,6 +48,6 @@ upstream = 6006            # or "10.0.0.5:6006", "http://app:8080", "/run/app.so
 # handshake_timeout = "15s"  # client TLS handshake and request headers
 # idle_timeout      = "90s"  # idle keep-alive connections
 # shutdown_grace    = "10s"  # in-flight requests on shutdown
-# qr_code           = true   # QR code in the banner for trusting the CA on a phone
+# qr_code           = true   # QR codes in the banner for phones (the CA, each app)
 # ca_name_constraints = true # limit a new local CA to local names and private
 #                            # addresses (applies when the CA is created)

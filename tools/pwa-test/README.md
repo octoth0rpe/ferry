@@ -10,14 +10,12 @@ glance whether trusting the CA worked.
 
 ```sh
 cd tools/pwa-test
-python3 -m http.server 8000 --bind 127.0.0.1
-# in another terminal
-ferry 6005:8000
+ferry 6005:8000 -- python3 -m http.server 8000 --bind 127.0.0.1
 ```
 
 Python only listens on 127.0.0.1, so the phone reaches the app through ferry.
-Scan the QR code in ferry's banner to trust the CA, then open
-`https://<lan-ip>:6005/` on the phone.
+On the phone, scan the first QR code in ferry's banner to trust the CA, then
+the second to open the app.
 
 ## What to check
 

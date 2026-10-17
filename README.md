@@ -16,9 +16,13 @@ ferry 0.1.0
     03:0B:A0:99:DC:39:A1:83:8F:C7:78:3B:B2:1A:DB:BB
     62:15:FB:C0:95:2B:0B:AF:8F:B7:F8:67:E0:EC:72:DA
   browsers warn until you trust the CA; see http://localhost:6005/.ferry/
-  on a phone, scan this to trust the CA (on an iPhone, open it in Safari):
-  (QR code)
+  on a phone, scan this first:          Trust ferry's CA, once per phone:
+  (QR code)                             iPhone
+                                         • Open the page in Safari and ...
   http://192.168.1.20:6005/.ferry/
+  then open the app on :6005:
+  (QR code)
+  https://192.168.1.20:6005/
 ```
 
 **HTTPS for development, with a path to production.** ferry gives your dev
@@ -209,8 +213,9 @@ instead set `security.enterprise_roots.enabled` to `true` in Firefox's
 `about:config`, so it uses the keychain.
 
 **Phones.** When stderr is a terminal, the banner shows a QR code for
-`http://<your LAN address>:PORT/.ferry/`. Scan it and follow the steps for
-your phone:
+`http://<your LAN address>:PORT/.ferry/`, with the steps beside it, and below
+that a QR code for each app. Scan the first and follow the steps for your
+phone:
 
 - **iPhone and iPad:** open the page in Safari (only Safari can install
   profiles) and download the certificate. Install the profile from Settings →
@@ -223,7 +228,7 @@ your phone:
 
 The page comes over plain HTTP, so check the fingerprint on it matches the one
 in ferry's banner. Over HTTPS, `/.ferry/` goes to your app like any other
-path. To leave the QR code out of the banner, set `qr_code = false` under
+path. To leave the QR codes out of the banner, set `qr_code = false` under
 `[advanced]`.
 
 Keep `ca-key.pem` private all the same: anyone with it could impersonate your
@@ -440,7 +445,7 @@ Load it with `launchctl load ~/Library/LaunchAgents/local.ferry.plist`.
 | TLS handshake + request headers  | 15s                                    | `[advanced] handshake_timeout`                |
 | Idle connections                 | 90s                                    | `[advanced] idle_timeout`                     |
 | Shutdown grace period            | 10s                                    | `[advanced] shutdown_grace`                   |
-| QR code for phones in the banner | on, when stderr is a terminal          | `[advanced] qr_code`                          |
+| QR codes for phones in the banner | on, when stderr is a terminal         | `[advanced] qr_code`                          |
 | Local CA name constraints        | on (local names, private addresses)    | `[advanced] ca_name_constraints`              |
 
 ## Shell completions and man page

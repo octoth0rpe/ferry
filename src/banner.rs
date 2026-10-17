@@ -13,8 +13,8 @@ use crate::mapping::Upstream;
 use crate::server::Plan;
 use crate::{dirs, net, trust};
 
-/// Builds the banner text. `color` adds bold/dim ANSI styling; `qr` shows a
-/// QR code for trusting the local CA on a phone.
+/// Builds the banner text. `color` adds bold/dim ANSI styling; `qr` shows QR
+/// codes for phones: one for trusting the local CA, one for each app.
 pub fn render(config: &Config, plan: &Plan, color: bool, qr: bool) -> String {
     let (bold, dim, reset) = match color {
         true => ("\x1b[1m", "\x1b[2m", "\x1b[0m"),
@@ -59,14 +59,14 @@ pub fn render(config: &Config, plan: &Plan, color: bool, qr: bool) -> String {
         let _ = writeln!(out, "  {dim}cert: {cert}{reset}");
     }
     if let Some(ca) = &plan.local_ca {
-        out.push_str(&trust_section(config, ca, color, qr));
+        out.push_str(&trust_section(config, ca, color));
     }
+    out.push_str(&phone_section(config, plan, color, qr));
     out
 }
 
-/// How to trust the local CA: its fingerprint, the `/.ferry/` page for this
-/// computer, and a QR code for phones.
-fn trust_section(config: &Config, ca: &LocalCa, color: bool, qr: bool) -> String {
+/// The local CA's fingerprint, and where to trust it on this computer.
+fn trust_section(config: &Config, ca: &LocalCa, color: bool) -> String {
     let (bold, dim, reset) = match color {
         true => ("\x1b[1m", "\x1b[2m", "\x1b[0m"),
         false => ("", "", ""),
@@ -84,79 +84,171 @@ fn trust_section(config: &Config, ca: &LocalCa, color: bool, qr: bool) -> String
     let _ = writeln!(out, "  {dim}CA fingerprint (SHA-256):{reset}");
     let _ = writeln!(out, "  {dim}  {fp1}{reset}");
     let _ = writeln!(out, "  {dim}  {fp2}{reset}");
-
-    // Plain HTTP on a port that uses the CA serves the page; pick ports that
-    // accept loopback and LAN connections respectively.
-    let ca_ports = config
-        .listeners
-        .iter()
-        .filter(|l| l.cert_key(config).is_none())
-        .map(|l| (l.mapping.bind, l.mapping.port));
-    let page = |host: &str, port: u16| {
-        let port = match port {
-            80 => String::new(),
-            p => format!(":{p}"),
-        };
-        format!("http://{host}{port}{}", trust::PATH)
-    };
-    let all = |bind: Option<IpAddr>| bind.is_none_or(|ip| ip.is_unspecified());
-    if let Some((_, port)) = ca_ports
-        .clone()
-        .find(|(bind, _)| all(*bind) || bind.is_some_and(|ip| ip.is_loopback()))
-    {
+    if let Some(port) = ca_port(config, |ip| ip.is_loopback()) {
         let _ = writeln!(
             out,
             "  {dim}browsers warn until you trust the CA; see {}{reset}",
-            page("localhost", port)
+            trust_page("localhost", port)
         );
-    }
-
-    let lan_ips = net::lan_ips_best_first();
-    let lan_pages: Vec<String> = lan_ips
-        .iter()
-        .filter(|ip| ip.is_ipv4())
-        .filter_map(|ip| {
-            let (_, port) = ca_ports
-                .clone()
-                .find(|(bind, _)| all(*bind) || *bind == Some(*ip))?;
-            Some(page(&ip.to_string(), port))
-        })
-        .collect();
-    if let Some((first, rest)) = lan_pages.split_first() {
-        if qr {
-            let _ = writeln!(out, "  on a phone, scan this to trust the CA:");
-            for line in qr_code(first, color) {
-                let _ = writeln!(out, "  {line}");
-            }
-            let _ = writeln!(out, "  {first}");
-        } else {
-            let _ = writeln!(out, "  {dim}on a phone: {first}{reset}");
-        }
-        for page in rest {
-            let _ = writeln!(out, "  {dim}  or {page}{reset}");
-        }
-        for line in PHONE_STEPS {
-            let _ = writeln!(out, "  {dim}{line}{reset}");
-        }
     }
     out
 }
 
+/// What a phone on the same network needs: the `/.ferry/` page for trusting
+/// the local CA, with the steps in brief, and each app's address. With `qr`,
+/// as QR codes side by side.
+fn phone_section(config: &Config, plan: &Plan, color: bool, qr: bool) -> String {
+    let (dim, reset) = match color {
+        true => ("\x1b[2m", "\x1b[0m"),
+        false => ("", ""),
+    };
+    let Some(ip) = net::lan_ips_best_first()
+        .into_iter()
+        .find(|ip| ip.is_ipv4())
+    else {
+        return String::new();
+    };
+    let reachable = |bind: Option<IpAddr>| all_interfaces(bind) || bind == Some(ip);
+    let trust = plan
+        .local_ca
+        .as_ref()
+        .and_then(|_| ca_port(config, |bind| bind == ip))
+        .map(|port| trust_page(&ip.to_string(), port));
+
+    let mut out = String::new();
+    if !qr {
+        if let Some(page) = &trust {
+            let _ = writeln!(out, "  {dim}on a phone, trust the CA at {page}{reset}");
+            for line in &PHONE_STEPS[1..] {
+                let _ = writeln!(out, "  {dim}  {line}{reset}");
+            }
+        }
+        return out;
+    }
+
+    // The CA first, in a row of its own with the steps beside it, since a
+    // phone has to trust it before the apps will load.
+    if let Some(page) = &trust {
+        let steps: Panel = PHONE_STEPS
+            .iter()
+            .map(|line| (format!("{dim}{line}{reset}"), line.chars().count()))
+            .collect();
+        let qr = panel("on a phone, scan this first:", page, color);
+        for line in rows(&[qr, steps]).concat() {
+            let _ = writeln!(out, "  {line}");
+        }
+    }
+    let mut ports: Vec<u16> = config
+        .listeners
+        .iter()
+        .filter(|l| reachable(l.mapping.bind))
+        .map(|l| l.mapping.port)
+        .collect();
+    ports.dedup();
+    let apps: Vec<Panel> = ports
+        .into_iter()
+        .map(|port| {
+            let url = match port {
+                443 => format!("https://{ip}/"),
+                p => format!("https://{ip}:{p}/"),
+            };
+            panel(&format!("then open the app on :{port}:"), &url, color)
+        })
+        .collect();
+    for line in rows(&apps).concat() {
+        let _ = writeln!(out, "  {line}");
+    }
+    out
+}
+
+/// One labelled QR code: its lines, each with its width on screen.
+type Panel = Vec<(String, usize)>;
+
+fn panel(label: &str, url: &str, color: bool) -> Panel {
+    let mut lines = vec![(label.to_string(), label.chars().count())];
+    lines.extend(qr_code(url, color));
+    lines.push((url.to_string(), url.chars().count()));
+    lines
+}
+
+/// Lays panels out two to a row where they fit in 80 columns, one otherwise.
+fn rows(panels: &[Panel]) -> Vec<Vec<String>> {
+    const GAP: usize = 4;
+    const WIDTH: usize = 78;
+    let width = |p: &Panel| p.iter().map(|(_, w)| *w).max().unwrap_or(0);
+    let mut rows = Vec::new();
+    let mut i = 0;
+    while i < panels.len() {
+        let pair = panels
+            .get(i + 1)
+            .filter(|next| width(&panels[i]) + GAP + width(next) <= WIDTH);
+        let row = match pair {
+            Some(next) => {
+                let w = width(&panels[i]);
+                let height = panels[i].len().max(next.len());
+                (0..height)
+                    .map(|n| {
+                        let (left, lw) = panels[i].get(n).cloned().unwrap_or_default();
+                        let right = next.get(n).map(|(s, _)| s.as_str()).unwrap_or("");
+                        format!("{left}{}{right}", " ".repeat(w - lw + GAP))
+                            .trim_end()
+                            .to_string()
+                    })
+                    .collect()
+            }
+            None => panels[i].iter().map(|(s, _)| s.clone()).collect(),
+        };
+        rows.push(row);
+        i += if pair.is_some() { 2 } else { 1 };
+    }
+    rows
+}
+
+fn all_interfaces(bind: Option<IpAddr>) -> bool {
+    bind.is_none_or(|ip| ip.is_unspecified())
+}
+
+/// The first port that uses the local CA and accepts connections on an
+/// address `bind` matches (or on all of them).
+fn ca_port(config: &Config, matches: impl Fn(IpAddr) -> bool) -> Option<u16> {
+    config
+        .listeners
+        .iter()
+        .filter(|l| l.cert_key(config).is_none())
+        .find(|l| all_interfaces(l.mapping.bind) || l.mapping.bind.is_some_and(&matches))
+        .map(|l| l.mapping.port)
+}
+
+fn trust_page(host: &str, port: u16) -> String {
+    let port = match port {
+        80 => String::new(),
+        p => format!(":{p}"),
+    };
+    format!("http://{host}{port}{}", trust::PATH)
+}
+
 /// The `/.ferry/` page's steps in brief, for people looking at the terminal
-/// rather than the phone.
-const PHONE_STEPS: [&str; 6] = [
-    "iPhone:  open the page in Safari and download the certificate. Then Settings →",
-    "         General → VPN & Device Management → ferry local CA → Install (within",
-    "         8 minutes), and General → About → Certificate Trust Settings → turn on",
-    "         ferry local CA.",
-    "Android: download the certificate, then Settings → search \"CA certificate\" →",
-    "         Install anyway → ferry-ca.crt.",
+/// rather than the phone. Narrow, to fit beside the QR code.
+const PHONE_STEPS: [&str; 13] = [
+    "Trust ferry's CA, once per phone:",
+    "iPhone",
+    " • Open the page in Safari and",
+    "   download the certificate.",
+    " • Settings → General → VPN & Device",
+    "   Management → ferry local CA →",
+    "   Install (within 8 minutes).",
+    " • General → About → Certificate",
+    "   Trust Settings → ferry local CA.",
+    "Android",
+    " • Download the certificate.",
+    " • Settings → search \"CA certificate\"",
+    "   → Install anyway → ferry-ca.crt.",
 ];
 
 /// A QR code drawn with half blocks, two rows of modules to a line. With
 /// `color`, it's black on white whatever the terminal's colours; without, it
 /// assumes light text on a dark background and draws the light modules.
-fn qr_code(text: &str, color: bool) -> Vec<String> {
+fn qr_code(text: &str, color: bool) -> Panel {
     let Ok(code) = QrCode::encode_text(text, QrCodeEcc::Low) else {
         return Vec::new();
     };
@@ -175,9 +267,10 @@ fn qr_code(text: &str, color: bool) -> Vec<String> {
                     (false, false) => ' ',
                 })
                 .collect();
+            let width = row.chars().count();
             match color {
-                true => format!("\x1b[30;107m{row}\x1b[0m"),
-                false => row,
+                true => (format!("\x1b[30;107m{row}\x1b[0m"), width),
+                false => (row, width),
             }
         })
         .collect()
@@ -251,6 +344,38 @@ pub fn log_listeners(config: &Config) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn panels_go_two_to_a_row_when_they_fit() {
+        let p = |label: &str, url: &str| panel(label, url, false);
+        let short = p("a", "https://192.168.1.20:6005/");
+        let width = short.iter().map(|(_, w)| *w).max().unwrap();
+        let rows_of = |panels: &[Panel]| rows(panels).iter().map(Vec::len).collect::<Vec<_>>();
+
+        // Three panels: a pair, then one on its own.
+        assert_eq!(
+            rows_of(&[short.clone(), short.clone(), short.clone()]),
+            vec![short.len(), short.len()]
+        );
+        let pair = &rows(&[short.clone(), short.clone()])[0];
+        assert!(pair[1].starts_with(&short[1].0), "{pair:?}");
+        assert_eq!(
+            pair.last().unwrap(),
+            &format!(
+                "{}{}{}",
+                short.last().unwrap().0,
+                " ".repeat(width - short.last().unwrap().1 + 4),
+                short.last().unwrap().0
+            )
+        );
+
+        // Too wide to pair: stacked.
+        let wide = p(&"x".repeat(60), "https://192.168.1.20:6005/");
+        assert_eq!(
+            rows_of(&[wide.clone(), short.clone()]),
+            vec![wide.len(), short.len()]
+        );
+    }
 
     #[test]
     fn urls_for_each_kind_of_bind() {

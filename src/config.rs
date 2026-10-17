@@ -83,7 +83,7 @@ pub struct Advanced {
     pub idle_timeout: Duration,
     /// How long in-flight requests get to finish on shutdown.
     pub shutdown_grace: Duration,
-    /// Show a QR code in the banner for trusting the local CA on a phone.
+    /// Show QR codes in the banner for phones: the local CA, and each app.
     pub qr_code: bool,
     /// Give a new local CA name constraints, so it can only vouch for local
     /// names and private addresses.
