@@ -1,0 +1,45 @@
+<!doctype html>
+<meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>ferry PWA test</title>
+<link rel=manifest href=manifest.json>
+<link rel=apple-touch-icon href=icon-192.png>
+<meta name=apple-mobile-web-app-capable content=yes>
+<style>
+  body { font: 18px/1.5 system-ui, sans-serif; max-width: 30em; margin: 2em auto; padding: 0 1em; }
+  .ok { color: #0a7d32; } .bad { color: #c62828; }
+  li { margin: .4em 0; }
+</style>
+<h1>ferry PWA test</h1>
+<ul>
+  <li>URL: <b id=url></b></li>
+  <li>Secure context: <b id=secure></b></li>
+  <li>Service worker: <b id=sw>checking…</b></li>
+  <li>This page: <b id=controlled></b></li>
+  <li>Display mode: <b id=mode></b></li>
+</ul>
+<p>Reload once after the service worker is active: the page should then be
+"controlled". Add it to the Home Screen, force-quit, relaunch: it should still
+say "controlled" and "standalone".</p>
+<script>
+  const set = (id, text, ok) => {
+    const el = document.getElementById(id);
+    el.textContent = text;
+    if (ok !== undefined) el.className = ok ? 'ok' : 'bad';
+  };
+  set('url', location.href);
+  set('secure', isSecureContext ? 'yes' : 'no (certificate not trusted, or plain HTTP)', isSecureContext);
+  const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+  set('mode', standalone ? 'standalone (Home Screen app)' : 'browser tab');
+  set('controlled', navigator.serviceWorker?.controller
+    ? 'controlled by the service worker' : 'not controlled (yet)',
+    !!navigator.serviceWorker?.controller);
+  if (!('serviceWorker' in navigator)) {
+    set('sw', 'not available (needs a trusted HTTPS page)', false);
+  } else {
+    navigator.serviceWorker.register('sw.js')
+      .then(reg => navigator.serviceWorker.ready)
+      .then(() => set('sw', 'registered and active', true))
+      .catch(e => set('sw', 'registration failed: ' + e.message, false));
+  }
+</script>

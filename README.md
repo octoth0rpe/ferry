@@ -441,6 +441,12 @@ cargo install --locked cargo-deny
 git config core.hooksPath .githooks
 ```
 
+### Testing on a phone
+
+`tools/pwa-test/` is a tiny installable web app for checking the local CA on
+real devices: run it with `python3 -m http.server` behind ferry. Its README
+has the steps and what to check.
+
 ### Updating dependencies
 
 ```sh

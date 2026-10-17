@@ -84,6 +84,9 @@ enable it once per clone with `git config core.hooksPath .githooks` (needs
 - The harness points `HOME` and `XDG_DATA_HOME` at a temp dir. Tests must
   never touch the real local CA or data directory.
 - Prefer an end-to-end test for anything a user would notice.
+- `tools/pwa-test/` is a static PWA for manual device testing of the local
+  CA (secure context, service worker, Home Screen); its README has the
+  checklist. Bump `CACHE` in its `sw.js` when changing its files.
 - Only macOS has been tested so far. Linux is a target but hasn't been built
   or run yet; be careful with platform-specific behaviour (sockets,
   signals, file watching).
