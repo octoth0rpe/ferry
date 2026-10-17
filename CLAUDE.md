@@ -43,8 +43,10 @@ enable it once per clone with `git config core.hooksPath .githooks` (needs
 - `ca.rs`: the local CA (the zero-config default). The root is persisted; a
   server cert is issued from it on every start and reload, and again when
   the machine's names or addresses change. New roots have name constraints
-  (local names, private IPs) unless `[advanced] ca_name_constraints = false`;
-  names a root can't cover are dropped from the server cert with a warning.
+  (`localhost`, `.local`, private IPs; deliberately not the hostname, which
+  can be a public FQDN) unless `[advanced] ca_name_constraints = false`.
+  Names a root can't cover are dropped from the server cert; IPs with a
+  warning.
 - `trust.rs`: the `/.ferry/` page served over plain HTTP on CA ports (the
   root, per-platform trust steps, desktop and NSS `certutil` commands).
 - `der.rs`: the few certificate fields ferry reads (notAfter, issuer ==

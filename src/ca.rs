@@ -143,11 +143,11 @@ pub fn load_or_create(constrain: bool) -> Result<LocalCa, String> {
     let (root, created) = match load_root(&paths.root) {
         Ok(root) => (root, None),
         Err(why) => {
-            let constraints = constrain.then(|| name_constraints(hostname().as_deref()));
+            let constraints = constrain.then(name_constraints);
             (create_root(&paths.root, constraints)?, Some(why))
         }
     };
-    let (cert, not_after, warnings) = issue_for(&root, &wanted, hostname().as_deref(), &paths)?;
+    let (cert, not_after, warnings) = issue_for(&root, &wanted, &paths)?;
     Ok(LocalCa {
         cert,
         root_name: root.name,
@@ -162,57 +162,35 @@ pub fn load_or_create(constrain: bool) -> Result<LocalCa, String> {
 }
 
 /// Issues a server certificate for as many of `wanted` as the root permits.
-/// A constrained root covers local names and private addresses only, plus the
-/// hostname the machine had when the root was made; `host` is its hostname
-/// now.
+/// A constrained root covers local names and private addresses only. A bare
+/// or fully qualified hostname is left out quietly (`hostname.local` covers
+/// the machine); an address it can't cover gets a warning, since someone
+/// might be trying to reach ferry at it.
 fn issue_for(
     root: &Root,
     wanted: &BTreeSet<String>,
-    host: Option<&str>,
     paths: &Paths,
 ) -> Result<(LoadedCert, i64, Vec<String>), String> {
     if !root.constrained {
         let (cert, not_after) = issue(root, wanted, paths)?;
         return Ok((cert, not_after, Vec::new()));
     }
-    let permitted = |constraints: &NameConstraints| -> BTreeSet<String> {
-        wanted
-            .iter()
-            .filter(|name| permits(constraints, name))
-            .cloned()
-            .collect()
-    };
-    let names = permitted(&name_constraints(host));
-    let mut warnings: Vec<String> = wanted
-        .difference(&names)
-        .map(|name| {
+    let constraints = name_constraints();
+    let (names, left_out): (BTreeSet<String>, BTreeSet<String>) = wanted
+        .iter()
+        .cloned()
+        .partition(|name| permits(&constraints, name));
+    let warnings = left_out
+        .iter()
+        .filter(|name| name.parse::<IpAddr>().is_ok())
+        .map(|ip| {
             format!(
-                "the certificate from ferry's local CA doesn't cover {name}: the CA only \
-                 covers local names and private addresses"
+                "the certificate from ferry's local CA doesn't cover {ip}: the CA only covers \
+                 private addresses"
             )
         })
         .collect();
-    let (cert, not_after) = match issue(root, &names, paths) {
-        Ok(issued) => issued,
-        Err(e) => {
-            // The hostname has probably changed since the root was made.
-            // Every ferry root permits the rest.
-            let fallback = permitted(&name_constraints(None));
-            let Ok(issued) = issue(root, &fallback, paths) else {
-                return Err(e);
-            };
-            warnings.extend(names.difference(&fallback).map(|name| {
-                format!(
-                    "the certificate from ferry's local CA doesn't cover {name}: the CA was \
-                     made when this machine had another name. Delete {} and {} to make a \
-                     new one; devices that trusted the old one will need to trust the new one",
-                    paths.root.cert.display(),
-                    paths.root.key.display()
-                )
-            }));
-            issued
-        }
-    };
+    let (cert, not_after) = issue(root, &names, paths)?;
     Ok((cert, not_after, warnings))
 }
 
@@ -378,16 +356,15 @@ fn verify(root: &CertificateDer<'static>, leaf: &CertificateDer<'_>) -> Result<(
 }
 
 /// What a constrained root may issue for: local names and private addresses.
-fn name_constraints(host: Option<&str>) -> NameConstraints {
+///
+/// The same for every root, so nothing about them goes stale. The hostname
+/// is left out on purpose: it's often a fully qualified public name, which
+/// would let the root vouch for that domain and everything under it.
+fn name_constraints() -> NameConstraints {
     let mut permitted = vec![
         GeneralSubtree::DnsName("localhost".into()),
         GeneralSubtree::DnsName("local".into()),
     ];
-    if let Some(host) = host
-        && host != "localhost"
-    {
-        permitted.push(GeneralSubtree::DnsName(host.into()));
-    }
     for cidr in PRIVATE_RANGES {
         let (ip, prefix) = cidr.split_once('/').expect("ranges have a prefix");
         let ip: IpAddr = ip.parse().expect("ranges are valid");
@@ -576,18 +553,24 @@ mod tests {
     fn name_constraints_limit_what_the_root_can_issue() {
         let dir = tempdir();
         let paths = paths_in(&dir);
-        let root = create_root(&paths.root, Some(name_constraints(Some("mbp")))).unwrap();
+        let root = create_root(&paths.root, Some(name_constraints())).unwrap();
         let local = names(&[
             "localhost",
             "127.0.0.1",
             "::1",
-            "mbp",
             "mbp.local",
             "192.168.1.20",
             "100.101.102.103",
         ]);
         issue(&root, &local, &paths).unwrap();
         let e = issue(&root, &names(&["localhost", "example.com"]), &paths)
+            .err()
+            .unwrap();
+        assert!(
+            e.contains("can't issue a certificate for this machine"),
+            "{e}"
+        );
+        let e = issue(&root, &names(&["localhost", "mbp"]), &paths)
             .err()
             .unwrap();
         assert!(
@@ -608,7 +591,7 @@ mod tests {
     fn constrained_roots_leave_out_public_addresses() {
         let dir = tempdir();
         let paths = paths_in(&dir);
-        let root = create_root(&paths.root, Some(name_constraints(Some("mbp")))).unwrap();
+        let root = create_root(&paths.root, Some(name_constraints())).unwrap();
         assert!(load_root(&paths.root).unwrap().constrained);
         let wanted = names(&[
             "localhost",
@@ -617,7 +600,7 @@ mod tests {
             "192.168.1.20",
             "203.0.113.7",
         ]);
-        let (_, _, warnings) = issue_for(&root, &wanted, Some("mbp"), &paths).unwrap();
+        let (_, _, warnings) = issue_for(&root, &wanted, &paths).unwrap();
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(
             warnings[0].contains("doesn't cover 203.0.113.7"),
@@ -627,21 +610,19 @@ mod tests {
     }
 
     #[test]
-    fn constrained_roots_survive_a_hostname_change() {
+    fn constrained_roots_leave_out_hostnames_quietly() {
         let dir = tempdir();
         let paths = paths_in(&dir);
-        let root = create_root(&paths.root, Some(name_constraints(Some("old")))).unwrap();
-        let wanted = names(&["localhost", "new", "new.local", "192.168.1.20"]);
-        let (_, _, warnings) = issue_for(&root, &wanted, Some("new"), &paths).unwrap();
-        assert_eq!(warnings.len(), 1, "{warnings:?}");
-        assert!(warnings[0].contains("doesn't cover new:"), "{warnings:?}");
-        assert!(warnings[0].contains("another name"), "{warnings:?}");
+        let root = create_root(&paths.root, Some(name_constraints())).unwrap();
+        let wanted = names(&["localhost", "mbp", "mbp.local", "build1.example.com"]);
+        let (_, _, warnings) = issue_for(&root, &wanted, &paths).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
         let chain: Vec<CertificateDer> = CertificateDer::pem_file_iter(&paths.server.cert)
             .unwrap()
             .collect::<Result<_, _>>()
             .unwrap();
         let covered: BTreeSet<String> = der::parse(&chain[0]).unwrap().names.into_iter().collect();
-        assert_eq!(covered, names(&["localhost", "new.local", "192.168.1.20"]));
+        assert_eq!(covered, names(&["localhost", "mbp.local"]));
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -652,17 +633,16 @@ mod tests {
         let root = create_root(&paths.root, None).unwrap();
         assert!(!load_root(&paths.root).unwrap().constrained);
         let wanted = names(&["localhost", "example.com", "203.0.113.7"]);
-        let (_, _, warnings) = issue_for(&root, &wanted, Some("mbp"), &paths).unwrap();
+        let (_, _, warnings) = issue_for(&root, &wanted, &paths).unwrap();
         assert!(warnings.is_empty(), "{warnings:?}");
         let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
     fn permitted_names() {
-        let c = name_constraints(Some("mbp"));
+        let c = name_constraints();
         for ok in [
             "localhost",
-            "mbp",
             "mbp.local",
             "a.b.local",
             "10.1.2.3",
@@ -678,6 +658,8 @@ mod tests {
         }
         for bad in [
             "example.com",
+            "mbp",
+            "build1.example.com",
             "notlocal",
             "mbp.example",
             "8.8.8.8",

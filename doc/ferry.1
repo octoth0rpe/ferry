@@ -233,11 +233,13 @@ this machine works there without warnings.
 .PP
 The CA has name constraints: it can only vouch for localhost, names ending in
 .IR .local ,
-the host name it was created with, and loopback, private, link\-local and
-carrier\-grade NAT addresses. If its key leaked, it could not be used to
-impersonate other sites to devices that trust it (Android ignores name
-constraints). Names it cannot cover, such as a public LAN address, are left
-out of the server certificate with a warning. To make a CA without them, set
+and loopback, private, link\-local and carrier\-grade NAT addresses. If its
+key leaked, it could not be used to impersonate other sites to devices that
+trust it (Android ignores name constraints). The server certificate then
+covers the machine as
+.IR hostname .local
+but not as the bare host name. An address it cannot cover, such as a public
+LAN address, is left out of the server certificate with a warning. To make a CA without them, set
 .B ca_name_constraints = false
 in
 .B [advanced]

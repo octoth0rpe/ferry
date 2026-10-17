@@ -143,12 +143,13 @@ the first time and keeps it, with its key, at:
 - Linux: `~/.local/share/ferry/ca.pem` (or `$XDG_DATA_HOME/ferry/`)
 
 The CA is valid for 10 years. It has *name constraints*: it can only vouch
-for `localhost`, names ending in `.local`, the hostname it was made with, and
-loopback and private addresses. A trusted CA can otherwise vouch for any
-site, so this limits the damage if its key ever leaks (Android ignores name
-constraints, so there the protection doesn't apply). If your machine has an
-address the CA can't cover, such as a public IP, ferry leaves it out of the
-certificate and says so. If you need a CA without constraints, set
+for `localhost`, names ending in `.local`, and loopback and private
+addresses. A trusted CA can otherwise vouch for any site, so this limits the
+damage if its key ever leaks (Android ignores name constraints, so there the
+protection doesn't apply). The certificate covers your machine as
+`hostname.local` but not as the bare hostname: use `.local` or an address
+from other machines. If your machine has an address the CA can't cover, such
+as a public IP, ferry leaves it out of the certificate and says so. If you need a CA without constraints, set
 `ca_name_constraints = false` under `[advanced]` and delete `ca.pem` and
 `ca-key.pem`; the setting only applies when the CA is created.
 
