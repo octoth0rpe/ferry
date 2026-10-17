@@ -100,10 +100,10 @@ enable it once per clone with `git config core.hooksPath .githooks` (needs
 
 ## Workflow
 
-- Development happens in a private repository, the `origin` remote. Issues
-  and milestones live on its tracker; use the `tea` CLI (see the gitea
-  skill). The code is published to GitHub, the `github` remote, at releases
-  only.
+- Development happens in a private repository, the `origin` remote, which
+  also holds the issues and milestones. The code is published to GitHub,
+  the `github` remote, at releases only. GitHub issues are open for users;
+  when one turns into work, track it privately too.
 - Each milestone gets a feature branch, pushed only to `origin`. Make one
   commit per story (or per tightly coupled group), then push the branch.
 - When the milestone is done, merge it into `main`, tag the tip (`vX.Y.Z`)
@@ -115,5 +115,5 @@ enable it once per clone with `git config core.hooksPath .githooks` (needs
   published the same way.
 - Every commit ends up public, so commit messages never mention issue
   numbers (GitHub would link `#N` to its own issues) or anything else
-  private. After pushing, close each issue with `tea issues close N` and
-  comment the commit hash on it.
+  private. After pushing, close each private issue and comment the commit
+  hash on it.
