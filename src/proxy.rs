@@ -166,6 +166,14 @@ async fn forward(
     permit: &mut Option<Permit>,
 ) -> Response<Body> {
     let stall = client.idle;
+    // ferry is a reverse proxy: a tunnel to anywhere isn't its to give.
+    if req.method() == http::Method::CONNECT {
+        return error_page(
+            StatusCode::METHOD_NOT_ALLOWED,
+            "ferry doesn't pass on CONNECT requests.",
+            html,
+        );
+    }
     if let (Some(limit), Some(len)) = (route.max_body, content_length(req.headers()))
         && len > limit
     {

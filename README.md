@@ -473,7 +473,7 @@ that parse those formats need their date format set accordingly.)
 
 - Speaks HTTP/2 and HTTP/1.1 to clients, negotiated automatically (ALPN).
 - Forwards the method, path, query and headers unchanged, and keeps `Host`
-  as the client sent it.
+  as the client sent it. `CONNECT` is refused with `405`.
 - Removes hop-by-hop headers (`Connection` and the headers it names, other
   than `Host` and `Content-Length`; `Keep-Alive`, `TE`, `Transfer-Encoding`,
   `Upgrade`, `Proxy-*`).

@@ -60,6 +60,22 @@ async fn sets_forwarding_headers_and_strips_hop_by_hop() {
 }
 
 #[tokio::test]
+async fn connect_requests_are_refused() {
+    let up = tcp_upstream("127.0.0.1:0").await;
+    let port = free_port();
+    let _ferry = Ferry::start(&[&format!("{port}:{up}")], port);
+
+    let mut tls = tls_connect(port).await;
+    tls.write_all(b"CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n")
+        .await
+        .unwrap();
+    let mut buf = [0u8; 1024];
+    let n = tls.read(&mut buf).await.unwrap();
+    let head = String::from_utf8_lossy(&buf[..n]);
+    assert!(head.starts_with("HTTP/1.1 405"), "{head}");
+}
+
+#[tokio::test]
 async fn connection_cant_strip_end_to_end_headers() {
     let up = tcp_upstream("127.0.0.1:0").await;
     let port = free_port();
