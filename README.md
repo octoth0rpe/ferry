@@ -538,8 +538,9 @@ start ferry in.
 background. Startup errors still appear in your terminal and the exit status
 reflects them. ferry warns if logs would go to the terminal, since they'd be
 discarded. The pid file (`pid_file`, or `--pid-file`) also works without `-d`.
-ferry refuses to start if the pid file names a running process, and removes
-the file on exit. `-d` is deliberately command-line only, so a config file
+ferry refuses to start if the pid file names a running process, locks it
+while running (so two ferries started at once can't both take it), won't
+write through a symbolic link there, and removes the file on exit. `-d` is deliberately command-line only, so a config file
 used under systemd or launchd can't make ferry fork by accident.
 
 ### systemd

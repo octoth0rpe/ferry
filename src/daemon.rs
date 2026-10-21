@@ -9,6 +9,7 @@ use std::io::{Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
+use nix::fcntl::{Flock, FlockArg};
 use nix::sys::signal::kill;
 use nix::unistd::{ForkResult, Pid, chdir, dup2_stderr, dup2_stdin, dup2_stdout, fork, setsid};
 
@@ -31,32 +32,53 @@ pub fn check_pid_file(path: &Path) -> Result<(), String> {
     }
 }
 
-/// Writes this process's pid to `path`.
+/// Writes this process's pid to `path`, and holds a lock on it while
+/// running, so a second ferry starting at the same moment can't take it too.
+/// A symbolic link there is refused rather than written through.
 pub fn write_pid_file(path: &Path) -> Result<PidFile, String> {
     let err = |e: std::io::Error| format!("can't write pid file {}: {e}", path.display());
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).map_err(err)?;
     }
-    let mut f = fs::OpenOptions::new()
+    let f = fs::OpenOptions::new()
         .write(true)
         .create(true)
-        .truncate(true)
         .mode(0o644)
+        .custom_flags(nix::libc::O_NOFOLLOW)
         .open(path)
-        .map_err(err)?;
+        .map_err(|e| match e.raw_os_error() {
+            Some(nix::libc::ELOOP) => format!(
+                "can't write pid file {}: it's a symbolic link, and ferry won't write through one",
+                path.display()
+            ),
+            _ => err(e),
+        })?;
+    let mut f = Flock::lock(f, FlockArg::LockExclusiveNonblock).map_err(|_| {
+        format!(
+            "ferry is already running (it holds {}); stop it or use another pid file",
+            path.display()
+        )
+    })?;
+    f.set_len(0).map_err(err)?;
     writeln!(f, "{}", std::process::id()).map_err(err)?;
-    Ok(PidFile(path.to_path_buf()))
+    Ok(PidFile {
+        path: path.to_path_buf(),
+        _lock: f,
+    })
 }
 
 /// Removes the pid file when dropped, if it still names this process.
-pub struct PidFile(PathBuf);
+pub struct PidFile {
+    path: PathBuf,
+    _lock: Flock<fs::File>,
+}
 
 impl Drop for PidFile {
     fn drop(&mut self) {
-        let ours =
-            fs::read_to_string(&self.0).is_ok_and(|s| s.trim() == std::process::id().to_string());
+        let ours = fs::read_to_string(&self.path)
+            .is_ok_and(|s| s.trim() == std::process::id().to_string());
         if ours {
-            let _ = fs::remove_file(&self.0);
+            let _ = fs::remove_file(&self.path);
         }
     }
 }

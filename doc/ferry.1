@@ -184,7 +184,8 @@ Write the process ID to
 and remove it on exit. Overrides
 .B pid_file
 in the configuration file. ferry refuses to start if the file names a process
-that is still running. Works with or without
+that is still running, or if another ferry holds its lock, and won't write
+through a symbolic link there. Works with or without
 .BR \-d .
 .TP
 .BI \-\-completions " shell"

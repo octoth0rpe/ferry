@@ -142,3 +142,43 @@ fn warns_that_stdout_logs_are_discarded() {
     let pid = std::fs::read_to_string(dir.path("p")).unwrap();
     Command::new("kill").arg(pid.trim()).status().unwrap();
 }
+
+#[test]
+fn the_pid_file_is_locked_while_ferry_runs() {
+    let home = TempDir::new();
+    let pid_file = home.path("ferry.pid");
+    let port = free_port();
+    let args = [
+        "--pid-file",
+        pid_file.to_str().unwrap(),
+        &format!("{port}:1"),
+    ];
+    let first = Ferry::start_in(home, &args, port);
+    // Even if the pid in it is unreadable, a second ferry can't take it.
+    std::fs::write(&pid_file, "junk").unwrap();
+    let mut second = Ferry::spawn(&[
+        "--pid-file",
+        pid_file.to_str().unwrap(),
+        &format!("{}:1", free_port()),
+    ]);
+    assert_eq!(second.wait(Duration::from_secs(10)), Some(1));
+    let err = second.stderr();
+    assert!(err.contains("ferry is already running (it holds"), "{err}");
+    drop(first);
+}
+
+#[test]
+fn a_symlinked_pid_file_is_refused() {
+    let dir = TempDir::new();
+    let victim = dir.path("victim");
+    std::fs::write(&victim, "keep me").unwrap();
+    std::os::unix::fs::symlink(&victim, dir.path("ferry.pid")).unwrap();
+    let out = ferry_in(
+        &dir,
+        &["--pid-file", "ferry.pid", &format!("{}:1", free_port())],
+    );
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("it's a symbolic link"), "{err}");
+    assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep me");
+}
