@@ -7,9 +7,6 @@ use crate::config::Config;
 use crate::mapping::Upstream;
 use crate::{ca, date, net, tls};
 
-/// Warn about certificates expiring sooner than this.
-const EXPIRY_WARNING_DAYS: i64 = 14;
-
 #[derive(Debug, Default)]
 pub struct Report {
     pub errors: Vec<String>,
@@ -34,17 +31,9 @@ pub fn check(config: &Config) -> Report {
             Some(ck) => match tls::load(ck) {
                 Ok(cert) => {
                     report.warnings.extend(cert.warnings);
-                    let date = date::date(cert.not_after);
-                    let days = (cert.not_after - now) / 86_400;
-                    if cert.not_after <= now {
-                        report
-                            .errors
-                            .push(format!("{} expired on {date}", ck.cert.display()));
-                    } else if days < EXPIRY_WARNING_DAYS {
-                        report.warnings.push(format!(
-                            "{} expires in {days} day(s), on {date}",
-                            ck.cert.display()
-                        ));
+                    match tls::expiry(&ck.cert, cert.not_after, now) {
+                        Err(e) => report.errors.push(e),
+                        Ok(w) => report.warnings.extend(w),
                     }
                 }
                 Err(e) => report.errors.push(e),

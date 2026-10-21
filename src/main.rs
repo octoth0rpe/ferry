@@ -187,6 +187,9 @@ async fn run(
     let mut server = Server::new();
     let mut issued = issued(&plan);
     let mut access_log = plan.log.clone();
+    let mut expiries = plan.expiries.clone();
+    // Certificates are checked for expiry at startup and reload, and daily.
+    let mut checked_day = date::now() / 86_400;
     if let Err(e) = server.apply(plan.listeners, sockets, plan.max_connections) {
         return fail(vec![e.to_string()]);
     }
@@ -231,6 +234,15 @@ async fn run(
                 format!("{} changed", names.join(", "))
             }
             _ = reissue_check.tick() => {
+                let today = date::now() / 86_400;
+                if today != checked_day {
+                    checked_day = today;
+                    for (path, not_after) in &expiries {
+                        if let Some(w) = server::expiry_warning(path, *not_after) {
+                            tracing::warn!("{w}");
+                        }
+                    }
+                }
                 let reason = issued
                     .as_ref()
                     .and_then(|(names, not_after)| ca::LocalCa::reissue_reason(names, *not_after));
@@ -249,6 +261,7 @@ async fn run(
                 );
                 issued = plan.issued;
                 access_log = plan.log;
+                expiries = plan.expiries;
                 watcher.set_files(watch::files(&new_config));
                 config = new_config;
             }
@@ -316,6 +329,7 @@ fn issued(plan: &server::Plan) -> Issued {
 struct Reloaded {
     issued: Issued,
     log: std::sync::Arc<log::AccessLogger>,
+    expiries: Vec<(PathBuf, i64)>,
 }
 
 /// Loads, checks and applies the configuration again. On any error the
@@ -342,6 +356,7 @@ fn reload(cli: &Cli, cwd: &Path, server: &mut Server) -> Result<(Config, Reloade
     let reloaded = Reloaded {
         issued: issued(&plan),
         log: plan.log.clone(),
+        expiries: plan.expiries.clone(),
     };
     server
         .apply(plan.listeners, sockets, plan.max_connections)

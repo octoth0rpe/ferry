@@ -256,6 +256,9 @@ caps the connections open at once, to clients and upstreams together, and
 by default fits within that limit. When it's reached, new clients wait to be
 accepted, and a request that needs an upstream connection is answered 503.
 .SH CERTIFICATES
+ferry warns in the error log about a configured certificate that expires
+within 14 days or has expired: at startup, on reload and once a day.
+.PP
 When no certificate is configured, ferry uses its own local certificate
 authority. The CA is created on first use and kept, with its key, in
 .I ~/Library/Application Support/ferry/

@@ -59,6 +59,21 @@ fn expired_cert_fails_and_expiring_warns() {
 }
 
 #[test]
+fn ferry_warns_about_expiring_and_expired_certificates_when_it_starts() {
+    let dir = TempDir::new();
+    for (name, days, says) in [
+        ("soon", 5, "soon.pem expires in "),
+        ("old", -1, "old.pem expired on"),
+    ] {
+        let (c, k) = write_cert(&dir, name, days);
+        let port = free_port();
+        let ferry = Ferry::start(&[&c, &k, &format!("{port}:6006")], port);
+        let err = ferry.wait_for_stderr(says);
+        assert!(err.contains("WARN") && err.contains(says), "{err}");
+    }
+}
+
+#[test]
 fn reports_all_config_errors() {
     let dir = TempDir::new();
     let path = dir.path("ferry.toml");

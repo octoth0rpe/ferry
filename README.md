@@ -302,7 +302,10 @@ The key must be unencrypted (PKCS#8, PKCS#1/RSA or SEC1/EC). ferry checks the
 key matches the certificate before it starts.
 
 When the certificate or key files change, ferry loads them automatically, so
-renewals by certbot or similar tools need no restart. Each listener in a
+renewals by certbot or similar tools need no restart. If a certificate
+expires within 14 days, or has expired, ferry warns in the error log at
+startup, on reload and once a day, so a renewal that stopped working doesn't
+go unnoticed. Each listener in a
 config file can have its own `cert` and `key`.
 
 ### The local CA

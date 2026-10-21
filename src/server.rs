@@ -90,6 +90,9 @@ pub struct Plan {
     pub trust_port: Option<u16>,
     /// The most connections open at once, to clients and upstreams.
     pub max_connections: usize,
+    /// The certificates configured (not the local CA's), and when each
+    /// expires, for checking while ferry runs.
+    pub expiries: Vec<(std::path::PathBuf, i64)>,
 }
 
 /// Loads certificates and builds listener state for a config. Doesn't bind.
@@ -101,6 +104,7 @@ pub fn build(config: &Config) -> Result<Plan, Vec<String>> {
     let mut local_ca = None;
     let mut trust_page = None;
     let mut listeners = Vec::new();
+    let mut expiries = Vec::new();
     let log = match AccessLogger::from_config(config) {
         Ok(log) => Arc::new(log),
         Err(e) => {
@@ -130,6 +134,10 @@ pub fn build(config: &Config) -> Result<Plan, Vec<String>> {
                 match cert {
                     Ok(cert) => {
                         warnings.extend(cert.warnings.iter().cloned());
+                        if let Some(ck) = &ck {
+                            warnings.extend(expiry_warning(&ck.cert, cert.not_after));
+                            expiries.push((ck.cert.clone(), cert.not_after));
+                        }
                         let sc = tls::server_config(&cert);
                         loaded.insert(ck, sc.clone());
                         Some(sc)
@@ -245,10 +253,19 @@ pub fn build(config: &Config) -> Result<Plan, Vec<String>> {
             local_ca,
             trust_port: None,
             max_connections,
+            expiries,
         })
     } else {
         errors.dedup();
         Err(errors)
+    }
+}
+
+/// A warning if the certificate at `path` has expired or soon will.
+pub fn expiry_warning(path: &std::path::Path, not_after: i64) -> Option<String> {
+    match tls::expiry(path, not_after, crate::date::now()) {
+        Ok(soon) => soon,
+        Err(expired) => Some(format!("{expired}; clients will refuse it")),
     }
 }
 

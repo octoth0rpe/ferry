@@ -23,6 +23,27 @@ pub struct LoadedCert {
     pub warnings: Vec<String>,
 }
 
+/// Warn about certificates expiring sooner than this.
+pub const EXPIRY_WARNING_DAYS: i64 = 14;
+
+/// Whether the certificate at `path`, expiring at `not_after`, has expired
+/// (`Err`) or expires within [`EXPIRY_WARNING_DAYS`] (`Ok(Some)`), as of
+/// `now`.
+pub fn expiry(path: &Path, not_after: i64, now: i64) -> Result<Option<String>, String> {
+    let date = crate::date::date(not_after);
+    let days = (not_after - now) / 86_400;
+    if not_after <= now {
+        Err(format!("{} expired on {date}", path.display()))
+    } else if days < EXPIRY_WARNING_DAYS {
+        Ok(Some(format!(
+            "{} expires in {days} day(s), on {date}",
+            path.display()
+        )))
+    } else {
+        Ok(None)
+    }
+}
+
 pub fn provider() -> Arc<CryptoProvider> {
     Arc::new(rustls::crypto::ring::default_provider())
 }
