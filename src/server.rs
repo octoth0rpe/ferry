@@ -375,6 +375,7 @@ async fn accept_loop(
             net::canonical(peer),
             state,
             shutdown.clone(),
+            tracker.clone(),
         ));
     }
 }
@@ -388,8 +389,15 @@ async fn handle_connection(
     peer: SocketAddr,
     state: Arc<ListenerState>,
     shutdown: CancellationToken,
+    tracker: TaskTracker,
 ) {
     let _ = stream.set_nodelay(true);
+    // So the kernel notices peers that vanished without closing, such as a
+    // phone that left the network mid-WebSocket.
+    let keepalive = socket2::TcpKeepalive::new()
+        .with_time(Duration::from_secs(60))
+        .with_interval(Duration::from_secs(10));
+    let _ = socket2::SockRef::from(&stream).set_tcp_keepalive(&keepalive);
     let mut first = [0u8; 1];
     match tokio::time::timeout(state.handshake_timeout, stream.peek(&mut first)).await {
         Ok(Ok(1)) => {}
@@ -423,11 +431,18 @@ async fn handle_connection(
     let log = state.log.clone();
     let requests = activity.clone();
     let idle = state.idle_timeout;
+    let client = Arc::new(proxy::Peer {
+        peer,
+        idle,
+        shutdown: shutdown.clone(),
+        tracker,
+    });
     let service = service_fn(move |req: Request<Incoming>| {
         let route = route.clone();
         let log = log.clone();
+        let client = client.clone();
         let progress = requests.start();
-        async move { Ok::<_, Infallible>(proxy::handle(&route, req, peer, &log, progress, idle).await) }
+        async move { Ok::<_, Infallible>(proxy::handle(&route, req, &client, &log, progress).await) }
     });
 
     let mut builder = auto::Builder::new(TokioExecutor::new());

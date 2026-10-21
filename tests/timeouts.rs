@@ -176,3 +176,58 @@ async fn slow_uploads_that_keep_moving_are_fine() {
         got.extend_from_slice(&buf[..n]);
     }
 }
+
+/// Upgrades a connection through ferry to the test upstream's echo.
+async fn upgraded(port: u16) -> tokio_rustls::client::TlsStream<tokio::net::TcpStream> {
+    let mut tls = tls_connect(port).await;
+    tls.write_all(
+        b"GET /upgrade HTTP/1.1\r\nHost: localhost\r\nConnection: Upgrade\r\nUpgrade: test-echo\r\n\r\n",
+    )
+    .await
+    .unwrap();
+    let mut head = Vec::new();
+    let mut byte = [0u8; 1];
+    while !head.ends_with(b"\r\n\r\n") {
+        assert_eq!(
+            tls.read(&mut byte).await.unwrap(),
+            1,
+            "closed during upgrade"
+        );
+        head.push(byte[0]);
+    }
+    assert!(
+        head.starts_with(b"HTTP/1.1 101"),
+        "{}",
+        String::from_utf8_lossy(&head)
+    );
+    tls
+}
+
+async fn echo(tls: &mut tokio_rustls::client::TlsStream<tokio::net::TcpStream>, msg: &[u8]) {
+    tls.write_all(msg).await.unwrap();
+    let mut got = vec![0u8; msg.len()];
+    tokio::time::timeout(Duration::from_secs(5), tls.read_exact(&mut got))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(got, msg);
+}
+
+#[tokio::test]
+async fn an_upgraded_connection_closes_when_nothing_moves() {
+    let (_ferry, port) = ferry_with("idle_timeout = \"1s\"").await;
+    let mut tls = upgraded(port).await;
+    echo(&mut tls, b"ping").await;
+    let took = closed_after(&mut tls, Duration::from_secs(10)).await;
+    assert!(took < Duration::from_secs(3), "closed after {took:?}");
+}
+
+#[tokio::test]
+async fn an_upgraded_connection_stays_open_while_it_is_used() {
+    let (_ferry, port) = ferry_with("idle_timeout = \"1s\"").await;
+    let mut tls = upgraded(port).await;
+    for _ in 0..5 {
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        echo(&mut tls, b"still here").await;
+    }
+}

@@ -340,7 +340,10 @@ and
 and adds an
 .B X\-Request\-Id
 (passed to the upstream, returned to the client, and logged) unless the
-client sent one. HTTP/1.1 upgrades such as WebSockets are passed through.
+client sent one. HTTP/1.1 upgrades such as WebSockets are passed through,
+and closed when nothing has moved either way for
+.BR idle_timeout ,
+or when ferry shuts down.
 .PP
 Plain HTTP sent to an HTTPS port is redirected (308) to the same URL over
 HTTPS. A mapping such as

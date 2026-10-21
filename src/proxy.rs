@@ -4,7 +4,7 @@ use std::io;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::task::{Context, Poll, ready};
 use std::time::Duration;
 
@@ -20,6 +20,9 @@ use http_body_util::{BodyExt, Full};
 use hyper::body::{Frame, Incoming, SizeHint};
 use hyper::upgrade::OnUpgrade;
 use hyper_util::rt::TokioIo;
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
 
 use crate::config::format_duration;
 use crate::log::{AccessLogger, Pending};
@@ -84,25 +87,35 @@ impl Route {
     }
 }
 
+/// The client connection a request arrived on.
+pub struct Peer {
+    pub peer: SocketAddr,
+    /// How long a request, or an upgraded connection, may go with nothing
+    /// moving.
+    pub idle: Duration,
+    pub shutdown: CancellationToken,
+    /// Upgraded connections run here, so shutdown knows about them.
+    pub tracker: TaskTracker,
+}
+
 /// Forwards one request to the route's upstream and returns its response, or
 /// an error page explaining what went wrong. `progress` is updated as the
-/// request moves; one that waits `stall` for its upstream with nothing
+/// request moves; one that waits `client.idle` for its upstream with nothing
 /// moving is answered 504.
 pub async fn handle(
     route: &Route,
     req: Request<Incoming>,
-    peer: SocketAddr,
+    client: &Peer,
     logger: &Arc<AccessLogger>,
     progress: Arc<Progress>,
-    stall: Duration,
 ) -> Response<Body> {
-    let pending = Pending::new(&req, peer);
+    let pending = Pending::new(&req, client.peer);
     let html = wants_html(req.headers());
     let request_id = request_id(req.headers());
 
     crate::child::wait_for(&route.upstream).await;
     progress.touch();
-    let mut resp = forward(route, req, peer, &request_id, html, &progress, stall).await;
+    let mut resp = forward(route, req, client, &request_id, html, &progress).await;
     progress.touch();
     resp.headers_mut().insert(X_REQUEST_ID, request_id.clone());
     let resp = resp.map(|inner| Progressed { inner, progress }.boxed());
@@ -117,12 +130,12 @@ pub async fn handle(
 async fn forward(
     route: &Route,
     mut req: Request<Incoming>,
-    peer: SocketAddr,
+    client: &Peer,
     request_id: &HeaderValue,
     html: bool,
     progress: &Arc<Progress>,
-    stall: Duration,
 ) -> Response<Body> {
+    let stall = client.idle;
     if let (Some(limit), Some(len)) = (route.max_body, content_length(req.headers()))
         && len > limit
     {
@@ -164,7 +177,7 @@ async fn forward(
         headers.insert(HOST, host.clone());
         headers.insert(X_FORWARDED_HOST, host.clone());
     }
-    append_forwarded_for(&mut headers, peer);
+    append_forwarded_for(&mut headers, client.peer);
     headers.insert(X_FORWARDED_PROTO, HeaderValue::from_static("https"));
     headers.insert(X_FORWARDED_PORT, HeaderValue::from(route.listen_port));
     headers.insert(X_REQUEST_ID, request_id.clone());
@@ -203,7 +216,10 @@ async fn forward(
     match (resp.status(), client_upgrade) {
         (StatusCode::SWITCHING_PROTOCOLS, Some(client_upgrade)) => {
             let upstream_upgrade = hyper::upgrade::on(&mut resp);
-            tokio::spawn(tunnel(client_upgrade, upstream_upgrade));
+            let (idle, shutdown) = (client.idle, client.shutdown.clone());
+            client
+                .tracker
+                .spawn(tunnel(client_upgrade, upstream_upgrade, idle, shutdown));
         }
         _ => strip_hop_by_hop(resp.headers_mut()),
     }
@@ -232,15 +248,89 @@ async fn until_stalled<F: Future>(
     }
 }
 
-/// Copies bytes both ways between an upgraded client and upstream connection.
-async fn tunnel(client: OnUpgrade, upstream: OnUpgrade) {
-    match tokio::try_join!(client, upstream) {
-        Ok((client, upstream)) => {
-            let mut client = TokioIo::new(client);
-            let mut upstream = TokioIo::new(upstream);
-            let _ = tokio::io::copy_bidirectional(&mut client, &mut upstream).await;
+/// Copies bytes both ways between an upgraded client and upstream
+/// connection, until either side closes, nothing has moved for `idle`, or
+/// ferry shuts down.
+async fn tunnel(
+    client: OnUpgrade,
+    upstream: OnUpgrade,
+    idle: Duration,
+    shutdown: CancellationToken,
+) {
+    let (client, upstream) = match tokio::try_join!(client, upstream) {
+        Ok(both) => both,
+        Err(e) => {
+            tracing::debug!("upgrade failed: {e}");
+            return;
         }
-        Err(e) => tracing::debug!("upgrade failed: {e}"),
+    };
+    let last = Arc::new(AtomicU64::new(now_ms()));
+    let mut client = Touching {
+        inner: TokioIo::new(client),
+        last: last.clone(),
+    };
+    let mut upstream = Touching {
+        inner: TokioIo::new(upstream),
+        last: last.clone(),
+    };
+    let copy = tokio::io::copy_bidirectional(&mut client, &mut upstream);
+    tokio::pin!(copy);
+    let idle = u64::try_from(idle.as_millis()).unwrap_or(u64::MAX);
+    loop {
+        let due = last.load(Ordering::Relaxed).saturating_add(idle);
+        tokio::select! {
+            _ = &mut copy => return,
+            _ = shutdown.cancelled() => return,
+            _ = tokio::time::sleep(Duration::from_millis(due.saturating_sub(now_ms()))) => {
+                if now_ms() >= last.load(Ordering::Relaxed).saturating_add(idle) {
+                    tracing::debug!("closing an upgraded connection: idle");
+                    return;
+                }
+            }
+        }
+    }
+}
+
+/// Records the time of the last read or write on a stream.
+struct Touching<T> {
+    inner: T,
+    last: Arc<AtomicU64>,
+}
+
+impl<T: AsyncRead + Unpin> AsyncRead for Touching<T> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let before = buf.filled().len();
+        let result = Pin::new(&mut self.inner).poll_read(cx, buf);
+        if buf.filled().len() > before {
+            self.last.store(now_ms(), Ordering::Relaxed);
+        }
+        result
+    }
+}
+
+impl<T: AsyncWrite + Unpin> AsyncWrite for Touching<T> {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        let result = Pin::new(&mut self.inner).poll_write(cx, buf);
+        if matches!(result, Poll::Ready(Ok(n)) if n > 0) {
+            self.last.store(now_ms(), Ordering::Relaxed);
+        }
+        result
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.inner).poll_shutdown(cx)
     }
 }
 

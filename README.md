@@ -483,7 +483,9 @@ that parse those formats need their date format set accordingly.)
 - Streams request and response bodies without buffering them.
 - Talks HTTP/1.1 to upstreams, with pooled keep-alive connections.
 - Passes `Upgrade` requests (WebSockets) through, in both directions. Clients
-  open WebSockets over HTTP/1.1; browsers do this automatically.
+  open WebSockets over HTTP/1.1; browsers do this automatically. An upgraded
+  connection is closed when nothing has moved either way for `idle_timeout`
+  (most WebSocket libraries ping well within that), or when ferry shuts down.
 - `--max-body` rejects larger requests with `413`, for both `Content-Length`
   and chunked bodies.
 - Answers `502` with an explanation when the upstream can't be reached, and
