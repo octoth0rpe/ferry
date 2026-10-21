@@ -154,6 +154,13 @@ fn the_pid_file_is_locked_while_ferry_runs() {
         &format!("{port}:1"),
     ];
     let first = Ferry::start_in(home, &args, port);
+    // ferry listens before it writes the pid file.
+    let pid = first.child.id().to_string();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while std::fs::read_to_string(&pid_file).map_or(true, |s| s.trim() != pid) {
+        assert!(std::time::Instant::now() < deadline, "no pid file");
+        std::thread::sleep(Duration::from_millis(25));
+    }
     // Even if the pid in it is unreadable, a second ferry can't take it.
     std::fs::write(&pid_file, "junk").unwrap();
     let mut second = Ferry::spawn(&[
