@@ -35,6 +35,8 @@ const X_FORWARDED_FOR: HeaderName = HeaderName::from_static("x-forwarded-for");
 const X_FORWARDED_PROTO: HeaderName = HeaderName::from_static("x-forwarded-proto");
 const X_FORWARDED_HOST: HeaderName = HeaderName::from_static("x-forwarded-host");
 const X_FORWARDED_PORT: HeaderName = HeaderName::from_static("x-forwarded-port");
+const X_REAL_IP: HeaderName = HeaderName::from_static("x-real-ip");
+const FORWARDED: HeaderName = HeaderName::from_static("forwarded");
 
 /// Headers that describe a single connection and must not be forwarded.
 const HOP_BY_HOP: [HeaderName; 9] = [
@@ -216,6 +218,12 @@ async fn forward(
         headers.insert(X_FORWARDED_HOST, host.clone());
     }
     append_forwarded_for(&mut headers, client.peer);
+    // ferry is the only proxy in front of the app, so these come from the
+    // client and can't be trusted; set the one ferry knows, drop the other.
+    let ip = HeaderValue::from_str(&client.peer.ip().to_string())
+        .expect("an IP is a valid header value");
+    headers.insert(X_REAL_IP, ip);
+    headers.remove(FORWARDED);
     headers.insert(X_FORWARDED_PROTO, HeaderValue::from_static("https"));
     headers.insert(X_FORWARDED_PORT, HeaderValue::from(route.listen_port));
     headers.insert(X_REQUEST_ID, request_id.clone());

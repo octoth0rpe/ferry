@@ -338,8 +338,12 @@ not valid, the errors are logged and the running configuration is kept.
 .SH REQUESTS
 ferry forwards the method, path, query, body and headers, keeping the
 .B Host
-header. It removes hop\-by\-hop headers, sets
-.BR X\-Forwarded\-For ,
+header. It removes hop\-by\-hop headers and any
+.B Forwarded
+header, sets
+.B X\-Forwarded\-For
+(appending the client's address, so the last entry is the one to trust),
+.BR X\-Real\-IP ,
 .BR X\-Forwarded\-Proto ,
 .B X\-Forwarded\-Host
 and

@@ -477,8 +477,10 @@ that parse those formats need their date format set accordingly.)
 - Removes hop-by-hop headers (`Connection` and the headers it names, other
   than `Host` and `Content-Length`; `Keep-Alive`, `TE`, `Transfer-Encoding`,
   `Upgrade`, `Proxy-*`).
-- Adds `X-Forwarded-For` (appended to any existing value),
-  `X-Forwarded-Proto: https`, `X-Forwarded-Host` and `X-Forwarded-Port`.
+- Adds `X-Forwarded-For` (appended to any existing value; the last entry is
+  the one ferry saw), `X-Real-IP` (the client's address, replacing any the
+  client sent), `X-Forwarded-Proto: https`, `X-Forwarded-Host` and
+  `X-Forwarded-Port`. A client's `Forwarded` header is dropped.
 - Adds an `X-Request-Id` if the client didn't send one, passes it to the
   upstream, returns it in the response, and logs it.
 - Streams request and response bodies without buffering them.

@@ -40,6 +40,8 @@ async fn sets_forwarding_headers_and_strips_hop_by_hop() {
         .header("connection", "x-private")
         .header("x-private", "secret")
         .header("x-request-id", "my-id")
+        .header("x-real-ip", "203.0.113.7")
+        .header("forwarded", "for=203.0.113.7")
         .send()
         .await
         .unwrap();
@@ -56,7 +58,10 @@ async fn sets_forwarding_headers_and_strips_hop_by_hop() {
     );
     assert!(has(&format!("x-forwarded-port: {port}")), "{body}");
     assert!(has("x-request-id: my-id"), "{body}");
+    assert!(has("x-real-ip: 127.0.0.1"), "{body}");
     assert!(!body.contains("x-private"), "{body}");
+    assert!(!body.contains("forwarded: "), "{body}");
+    assert!(!body.contains("203.0.113.7"), "{body}");
 }
 
 #[tokio::test]
