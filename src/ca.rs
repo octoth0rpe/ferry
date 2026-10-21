@@ -144,10 +144,11 @@ pub fn load_or_create(constrain: bool) -> Result<LocalCa, String> {
         Ok(root) => (root, None),
         Err(why) => {
             let constraints = constrain.then(name_constraints);
-            (create_root(&paths.root, constraints)?, Some(why))
+            let root = create_root(&paths.root, constraints).map_err(with_home_hint)?;
+            (root, Some(why))
         }
     };
-    let (cert, not_after, warnings) = issue_for(&root, &wanted, &paths)?;
+    let (cert, not_after, warnings) = issue_for(&root, &wanted, &paths).map_err(with_home_hint)?;
     Ok(LocalCa {
         cert,
         root_name: root.name,
@@ -159,6 +160,15 @@ pub fn load_or_create(constrain: bool) -> Result<LocalCa, String> {
         created,
         warnings,
     })
+}
+
+/// Adds a hint to `err` when HOME isn't ours, the likely reason ferry
+/// couldn't write its files there.
+fn with_home_hint(err: String) -> String {
+    match dirs::home_hint() {
+        Some(hint) => format!("{err}. {hint}"),
+        None => err,
+    }
 }
 
 /// Issues a server certificate for as many of `wanted` as the root permits.
