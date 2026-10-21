@@ -400,6 +400,9 @@ pub fn random_id(len: usize) -> String {
     id
 }
 
+/// Removes hop-by-hop headers, and any others `Connection` names, except
+/// the end-to-end ones a request can't do without: naming `Host` or
+/// `Content-Length` there mustn't change what the upstream sees.
 fn strip_hop_by_hop(headers: &mut HeaderMap) {
     let named: Vec<HeaderName> = headers
         .get_all(CONNECTION)
@@ -407,6 +410,7 @@ fn strip_hop_by_hop(headers: &mut HeaderMap) {
         .filter_map(|v| v.to_str().ok())
         .flat_map(|v| v.split(','))
         .filter_map(|name| HeaderName::from_bytes(name.trim().as_bytes()).ok())
+        .filter(|name| *name != HOST && *name != CONTENT_LENGTH)
         .collect();
     for name in named.iter().chain(HOP_BY_HOP.iter()) {
         headers.remove(name);
@@ -701,6 +705,17 @@ mod tests {
         strip_hop_by_hop(&mut h);
         assert_eq!(h.len(), 1);
         assert!(h.contains_key("x-kept"));
+    }
+
+    #[test]
+    fn connection_cant_strip_host_or_content_length() {
+        let mut h = HeaderMap::new();
+        h.insert(CONNECTION, "host, content-length".parse().unwrap());
+        h.insert(HOST, "example.com".parse().unwrap());
+        h.insert(CONTENT_LENGTH, "5".parse().unwrap());
+        strip_hop_by_hop(&mut h);
+        assert_eq!(h[HOST], "example.com");
+        assert_eq!(h[CONTENT_LENGTH], "5");
     }
 
     #[test]

@@ -60,6 +60,31 @@ async fn sets_forwarding_headers_and_strips_hop_by_hop() {
 }
 
 #[tokio::test]
+async fn connection_cant_strip_end_to_end_headers() {
+    let up = tcp_upstream("127.0.0.1:0").await;
+    let port = free_port();
+    let _ferry = Ferry::start(&[&format!("{port}:{up}")], port);
+
+    let mut tls = tls_connect(port).await;
+    tls.write_all(
+        b"POST /headers HTTP/1.1\r\nHost: example.com\r\nConnection: host, content-length\r\n\
+          Content-Length: 5\r\n\r\nhello",
+    )
+    .await
+    .unwrap();
+    let mut got = Vec::new();
+    let mut buf = [0u8; 4096];
+    while !String::from_utf8_lossy(&got).contains("x-request-id") {
+        let n = tls.read(&mut buf).await.unwrap();
+        assert!(n > 0, "{}", String::from_utf8_lossy(&got));
+        got.extend_from_slice(&buf[..n]);
+    }
+    let body = String::from_utf8_lossy(&got);
+    assert!(body.contains("\nhost: example.com\n"), "{body}");
+    assert!(body.contains("\ncontent-length: 5\n"), "{body}");
+}
+
+#[tokio::test]
 async fn http2_requests_get_a_host_header() {
     let up = tcp_upstream("127.0.0.1:0").await;
     let port = free_port();

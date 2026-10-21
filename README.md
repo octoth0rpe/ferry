@@ -474,8 +474,9 @@ that parse those formats need their date format set accordingly.)
 - Speaks HTTP/2 and HTTP/1.1 to clients, negotiated automatically (ALPN).
 - Forwards the method, path, query and headers unchanged, and keeps `Host`
   as the client sent it.
-- Removes hop-by-hop headers (`Connection` and the headers it names,
-  `Keep-Alive`, `TE`, `Transfer-Encoding`, `Upgrade`, `Proxy-*`).
+- Removes hop-by-hop headers (`Connection` and the headers it names, other
+  than `Host` and `Content-Length`; `Keep-Alive`, `TE`, `Transfer-Encoding`,
+  `Upgrade`, `Proxy-*`).
 - Adds `X-Forwarded-For` (appended to any existing value),
   `X-Forwarded-Proto: https`, `X-Forwarded-Host` and `X-Forwarded-Port`.
 - Adds an `X-Request-Id` if the client didn't send one, passes it to the
