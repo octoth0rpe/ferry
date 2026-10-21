@@ -278,7 +278,10 @@ trust it (Android ignores name constraints). The server certificate then
 covers the machine as
 .IR hostname .local
 but not as the bare host name. An address it cannot cover, such as a public
-LAN address, is left out of the server certificate with a warning. To make a CA without them, set
+address, is left out of the server certificate, with a warning that
+visitors from the internet will get certificate warnings; a public site
+needs a certificate of its own. To make a CA without name constraints on a
+private network, set
 .B ca_name_constraints = false
 in
 .B [advanced]
@@ -286,7 +289,8 @@ and delete
 .I ca.pem
 and
 .IR ca\-key.pem ;
-the setting only applies when the CA is created.
+the setting only applies when the CA is created. Don't do that on a machine
+the internet can reach: such a CA can vouch for any site.
 .PP
 On every start and reload ferry issues a new server certificate from the CA,
 written to
@@ -303,8 +307,9 @@ chosen by the system and kept across reloads, so nothing of ferry's appears
 at the applications' addresses; the banner links to it. The CA certificate
 itself is at
 .I /ca.crt
-on that port. If every listener using the CA is bound to loopback, so is the
-page. When stderr is a
+on that port. The page answers only clients on loopback and private networks,
+and shows the commands for this machine only to this machine. If every
+listener using the CA is bound to loopback, so is the page. When stderr is a
 terminal, the banner shows the start and end of the CA's SHA\-256
 fingerprint, a QR code for the
 page at the machine's LAN address with the steps beside it, and a QR code

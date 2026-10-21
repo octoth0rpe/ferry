@@ -320,9 +320,13 @@ damage if its key ever leaks (Android ignores name constraints, so there the
 protection doesn't apply). The certificate covers your machine as
 `hostname.local` but not as the bare hostname: use `.local` or an address
 from other machines. If your machine has an address the CA can't cover, such
-as a public IP, ferry leaves it out of the certificate and says so. If you need a CA without constraints, set
-`ca_name_constraints = false` under `[advanced]` and delete `ca.pem` and
-`ca-key.pem`; the setting only applies when the CA is created.
+as a public IP, ferry leaves it out of the certificate and warns that
+visitors from the internet will get certificate warnings: for a public site,
+give ferry a certificate. If you need a CA without constraints on a private
+network, set `ca_name_constraints = false` under `[advanced]` and delete
+`ca.pem` and `ca-key.pem`; the setting only applies when the CA is created.
+Don't do that on a machine the internet can reach: a CA without constraints
+can vouch for any site, so its key is worth stealing.
 
 On every start, ferry issues a new server
 certificate from it (`server.pem` in the same directory) covering
@@ -333,8 +337,11 @@ server certificate directly, so replacing it costs nothing.
 
 Browsers warn until you trust the CA. ferry serves a page about trusting it
 over plain HTTP, on a port of its own that the system picks, so it never
-appears at your apps' addresses; the banner links to it. The page has the
-commands for this machine, filled in with the real paths:
+appears at your apps' addresses; the banner links to it. It answers only
+devices on this machine and private networks (loopback, private and
+carrier-grade NAT addresses, such as Tailscale's); connections from anywhere
+else are closed. Opened on this machine, the page has the commands for it,
+filled in with the real paths:
 
 ```sh
 # macOS

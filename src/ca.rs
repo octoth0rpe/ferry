@@ -181,27 +181,67 @@ fn issue_for(
     wanted: &BTreeSet<String>,
     paths: &Paths,
 ) -> Result<(LoadedCert, i64, Vec<String>), String> {
+    let public: Vec<IpAddr> = wanted
+        .iter()
+        .filter_map(|name| name.parse::<IpAddr>().ok())
+        .filter(|ip| !net::is_private(*ip))
+        .collect();
     if !root.constrained {
         let (cert, not_after) = issue(root, wanted, paths)?;
-        return Ok((cert, not_after, Vec::new()));
+        let warnings = (!public.is_empty())
+            .then(|| unconstrained_public_warning(&public))
+            .into_iter()
+            .collect();
+        return Ok((cert, not_after, warnings));
     }
     let constraints = name_constraints();
-    let (names, left_out): (BTreeSet<String>, BTreeSet<String>) = wanted
+    let names: BTreeSet<String> = wanted
         .iter()
+        .filter(|name| permits(&constraints, name))
         .cloned()
-        .partition(|name| permits(&constraints, name));
-    let warnings = left_out
-        .iter()
-        .filter(|name| name.parse::<IpAddr>().is_ok())
-        .map(|ip| {
-            format!(
-                "the certificate from ferry's local CA doesn't cover {ip}: the CA only covers \
-                 private addresses"
-            )
-        })
+        .collect();
+    let warnings = (!public.is_empty())
+        .then(|| public_warning(&public))
+        .into_iter()
         .collect();
     let (cert, not_after) = issue(root, &names, paths)?;
     Ok((cert, not_after, warnings))
+}
+
+/// This machine's addresses that the local CA can't vouch for.
+pub fn public_ips() -> Vec<IpAddr> {
+    net::local_ips()
+        .into_iter()
+        .filter(|ip| !net::is_private(*ip))
+        .collect()
+}
+
+fn list(ips: &[IpAddr]) -> String {
+    ips.iter()
+        .map(IpAddr::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// For a machine reachable from the internet that uses the local CA.
+pub fn public_warning(ips: &[IpAddr]) -> String {
+    format!(
+        "this machine has a public address ({}), but ferry's local CA only vouches for \
+         local names and private addresses, so visitors from the internet will get \
+         certificate warnings. For a public site, give ferry a certificate: \
+         `ferry CERT KEY PORT:UPSTREAM`, or `cert` and `key` in the config file",
+        list(ips)
+    )
+}
+
+fn unconstrained_public_warning(ips: &[IpAddr]) -> String {
+    format!(
+        "this machine has a public address ({}), and ferry's local CA has no name \
+         constraints (ca_name_constraints = false): anyone who gets its key could \
+         impersonate any site to devices that trust it. For a public site, give ferry a \
+         certificate instead",
+        list(ips)
+    )
 }
 
 struct Root {
@@ -266,12 +306,10 @@ fn create_root(paths: &CertKey, constraints: Option<NameConstraints>) -> Result<
     let err = |e: &dyn std::fmt::Display| format!("can't create ferry's local CA: {e}");
     // iOS leaves roots without a common name out of Certificate Trust
     // Settings, so they can't be trusted. Naming the machine tells several
-    // ferry roots apart on a phone.
-    let user = std::env::var("USER")
-        .or_else(|_| std::env::var("LOGNAME"))
-        .unwrap_or_else(|_| "ferry".into());
+    // ferry roots apart on a phone. Not the user: the name goes out in every
+    // TLS handshake.
     let host = hostname().unwrap_or_else(|| "localhost".into());
-    let name = format!("ferry local CA ({user}@{host})");
+    let name = format!("ferry local CA ({host})");
 
     let mut params = root_params(&name);
     let now = date::now();
@@ -613,7 +651,11 @@ mod tests {
         let (_, _, warnings) = issue_for(&root, &wanted, &paths).unwrap();
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(
-            warnings[0].contains("doesn't cover 203.0.113.7"),
+            warnings[0].starts_with("this machine has a public address (203.0.113.7)"),
+            "{warnings:?}"
+        );
+        assert!(
+            warnings[0].contains("give ferry a certificate"),
             "{warnings:?}"
         );
         let _ = fs::remove_dir_all(dir);
@@ -642,9 +684,14 @@ mod tests {
         let paths = paths_in(&dir);
         let root = create_root(&paths.root, None).unwrap();
         assert!(!load_root(&paths.root).unwrap().constrained);
-        let wanted = names(&["localhost", "example.com", "203.0.113.7"]);
+        let wanted = names(&["localhost", "example.com", "192.168.1.20"]);
         let (_, _, warnings) = issue_for(&root, &wanted, &paths).unwrap();
         assert!(warnings.is_empty(), "{warnings:?}");
+        // On a public host, that's a root that could impersonate anything.
+        let wanted = names(&["localhost", "203.0.113.7"]);
+        let (_, _, warnings) = issue_for(&root, &wanted, &paths).unwrap();
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("no name constraints"), "{warnings:?}");
         let _ = fs::remove_dir_all(dir);
     }
 

@@ -6,6 +6,7 @@
 //! without a warning, and its own port so ferry never serves anything of its
 //! own at an app's address.
 
+use std::net::IpAddr;
 use std::path::PathBuf;
 
 use bytes::Bytes;
@@ -20,6 +21,9 @@ use crate::upstream::Body;
 
 /// The page and certificate, rendered once per configuration.
 pub struct Page {
+    /// With commands for trusting the CA on this computer, which name paths
+    /// in the user's home: only for visitors on this computer.
+    html_here: Bytes,
     html: Bytes,
     der: Bytes,
 }
@@ -27,13 +31,14 @@ pub struct Page {
 impl Page {
     pub fn new(ca: &LocalCa) -> Page {
         Page {
-            html: Bytes::from(render(ca)),
+            html_here: Bytes::from(render(ca, true)),
+            html: Bytes::from(render(ca, false)),
             der: Bytes::from(ca.root_der.clone()),
         }
     }
 
-    /// Answers a request to the page's port.
-    pub fn respond<B>(&self, req: &Request<B>) -> Response<Body> {
+    /// Answers a request to the page's port from `peer`.
+    pub fn respond<B>(&self, req: &Request<B>, peer: IpAddr) -> Response<Body> {
         if req.method() != Method::GET && req.method() != Method::HEAD {
             let mut resp = error_page(
                 StatusCode::METHOD_NOT_ALLOWED,
@@ -58,6 +63,9 @@ impl Page {
             resp
         };
         match req.uri().path() {
+            "/" if peer.is_loopback() || crate::net::local_ips().contains(&peer) => {
+                html(&self.html_here)
+            }
             "/" => html(&self.html),
             "/ca.crt" => cert(false),
             "/ferry-ca.crt" => cert(true),
@@ -179,7 +187,7 @@ pub fn fingerprint_lines(fingerprint: &str) -> [&str; 2] {
     ]
 }
 
-fn render(ca: &LocalCa) -> String {
+fn render(ca: &LocalCa, here: bool) -> String {
     let name = escape_html(&ca.root_name);
     let [fp1, fp2] = fingerprint_lines(&ca.fingerprint);
     let commands: String = desktop_commands(ca)
@@ -199,6 +207,12 @@ fn render(ca: &LocalCa) -> String {
     } else {
         "Firefox, and Chrome on Linux, keep their own certificate stores. Add the CA to each \
          with <code>certutil</code> (in <code>libnss3-tools</code> or <code>nss-tools</code>)."
+    };
+    let this_computer = match here {
+        true => format!("{commands}<p>{certutil_note}</p>\n<p>Restart the browser afterwards.</p>"),
+        false => "<p>To trust it on the computer running ferry, open this page there, at \
+                  <code>localhost</code>, for the commands.</p>"
+            .to_string(),
     };
     format!(
         r#"<!doctype html>
@@ -251,8 +265,7 @@ Security → Encryption &amp; credentials → Install a certificate).</li>
 certificate you add yourself.</p>
 
 <h2>This computer</h2>
-{commands}<p>{certutil_note}</p>
-<p>Restart the browser afterwards.</p>
+{this_computer}
 "#
     )
 }
@@ -271,6 +284,24 @@ mod tests {
         assert_eq!(sh_quote("it's"), r"'it'\''s'");
         assert_eq!(sh_quote(""), "''");
         assert_eq!(sh_quote("~x"), "'~x'");
+    }
+
+    #[tokio::test]
+    async fn other_devices_get_the_page_without_this_computers_commands() {
+        let page = Page {
+            html_here: Bytes::from_static(b"here"),
+            html: Bytes::from_static(b"elsewhere"),
+            der: Bytes::new(),
+        };
+        let req = Request::get("/").body(()).unwrap();
+        let text = |peer: &str| {
+            let resp = page.respond(&req, peer.parse().unwrap());
+            async move { resp.into_body().collect().await.unwrap().to_bytes() }
+        };
+        assert_eq!(text("127.0.0.1").await, "here");
+        assert_eq!(text("::1").await, "here");
+        // TEST-NET-2: never one of this machine's addresses.
+        assert_eq!(text("198.51.100.7").await, "elsewhere");
     }
 
     #[test]

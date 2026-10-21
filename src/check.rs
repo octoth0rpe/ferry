@@ -62,6 +62,10 @@ pub fn check(config: &Config) -> Report {
             },
         }
     }
+    let public = ca::public_ips();
+    if seen.contains(&None) && !public.is_empty() {
+        report.warnings.push(ca::public_warning(&public));
+    }
 
     for l in &config.listeners {
         if let Upstream::Unix(path) = &l.mapping.upstream {

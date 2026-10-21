@@ -93,6 +93,33 @@ async fn the_trust_page_has_a_port_of_its_own() {
 }
 
 #[tokio::test]
+async fn this_computer_sees_the_commands_for_it() {
+    let up = tcp_upstream("127.0.0.1:0").await;
+    let port = free_port();
+    let ferry = Ferry::start(&[&format!("{port}:{up}")], port);
+    let page = trust_url(&ferry);
+    let trust_port = page.rsplit(':').next().unwrap().trim_end_matches('/');
+    let command = match cfg!(target_os = "macos") {
+        true => "security add-trusted-cert",
+        false => "update-ca-certificates",
+    };
+    let http = plain_client();
+    let here = http
+        .get(format!("http://127.0.0.1:{trust_port}/"))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(here.contains(command), "{here}");
+    // The banner's link, at this machine's LAN address, is still this
+    // computer.
+    let lan = http.get(&page).send().await.unwrap().text().await.unwrap();
+    assert!(lan.contains(command), "{lan}");
+}
+
+#[tokio::test]
 async fn app_ports_are_left_to_the_app() {
     let up = tcp_upstream("127.0.0.1:0").await;
     let port = free_port();

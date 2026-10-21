@@ -569,6 +569,11 @@ async fn handle_connection(
     tracker: TaskTracker,
     (limit, permit): (Arc<Limit>, Permit),
 ) {
+    // The trust page is for devices on this machine's networks; nobody on
+    // the internet has any business with it.
+    if state.trust_page.is_some() && !net::is_private(peer.ip()) {
+        return;
+    }
     let _ = stream.set_nodelay(true);
     // So the kernel notices peers that vanished without closing, such as a
     // phone that left the network mid-WebSocket.
@@ -716,7 +721,7 @@ async fn serve_plain(stream: TcpStream, peer: SocketAddr, state: &ListenerState)
         async move {
             let pending = Pending::new(&req, peer);
             let (resp, upstream) = match trust_page {
-                Some(page) => (page.respond(&req), "ferry"),
+                Some(page) => (page.respond(&req, peer.ip()), "ferry"),
                 None => (redirect_response(&req, redirect, redirect_to), "redirect"),
             };
             let id = HeaderValue::from_static("-");
