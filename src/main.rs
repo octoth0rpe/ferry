@@ -123,12 +123,12 @@ fn main() -> ExitCode {
     // clearing the screen).
     let banner = match cli.command.is_empty() {
         true => {
-            banner::show(&config, &plan, cli.daemonize);
+            banner::show(&config, &plan);
             None
         }
         false => {
             banner::log_listeners(&config);
-            banner::text(&config, &plan, false)
+            banner::text(&config, &plan)
         }
     };
 

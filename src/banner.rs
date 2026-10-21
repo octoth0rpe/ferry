@@ -322,23 +322,24 @@ fn tilde(path: &Path) -> String {
 }
 
 /// Prints the banner to stderr unless `-q`, and logs the listeners to the
-/// error log when it isn't the terminal (so log files record them too). The
-/// QR code is only for people watching a terminal, not for background mode.
-pub fn show(config: &Config, plan: &Plan, daemonize: bool) {
-    if let Some(banner) = text(config, plan, daemonize) {
+/// error log when it isn't the terminal (so log files record them too).
+/// With `-d` it's printed before going into the background, so the
+/// terminal still gets the QR codes.
+pub fn show(config: &Config, plan: &Plan) {
+    if let Some(banner) = text(config, plan) {
         eprint!("{banner}");
     }
     log_listeners(config);
 }
 
 /// The banner as [`show`] would print it, or `None` with `-q`.
-pub fn text(config: &Config, plan: &Plan, daemonize: bool) -> Option<String> {
+pub fn text(config: &Config, plan: &Plan) -> Option<String> {
     if config.quiet {
         return None;
     }
     let tty = std::io::stderr().is_terminal();
     let color = tty && std::env::var_os("NO_COLOR").is_none();
-    let qr = tty && !daemonize && config.advanced.qr_code;
+    let qr = tty && config.advanced.qr_code;
     Some(render(config, plan, color, qr))
 }
 
