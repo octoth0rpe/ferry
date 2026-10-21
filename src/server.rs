@@ -8,10 +8,8 @@ use std::collections::HashMap;
 use std::convert::Infallible;
 use std::io;
 use std::net::{IpAddr, SocketAddr};
-use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock, RwLock};
-use std::task::{Context, Poll};
+use std::sync::{Arc, Mutex, OnceLock, RwLock, Weak};
 use std::time::{Duration, Instant};
 
 use http::header::{HOST, LOCATION};
@@ -20,7 +18,6 @@ use hyper::body::Incoming;
 use hyper::service::service_fn;
 use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use hyper_util::server::conn::auto;
-use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::TlsAcceptor;
 use tokio_util::sync::CancellationToken;
@@ -420,24 +417,27 @@ async fn handle_connection(
         }
     };
 
-    let activity = Arc::new(AtomicU64::new(now_ms()));
-    let io = TokioIo::new(Tracked {
-        inner: tls,
-        last: activity.clone(),
-    });
+    let activity = Arc::new(Activity::new());
+    let io = TokioIo::new(tls);
     let route = https.route.clone();
     let log = state.log.clone();
+    let requests = activity.clone();
+    let idle = state.idle_timeout;
     let service = service_fn(move |req: Request<Incoming>| {
         let route = route.clone();
         let log = log.clone();
-        async move { Ok::<_, Infallible>(proxy::handle(&route, req, peer, &log).await) }
+        let progress = requests.start();
+        async move { Ok::<_, Infallible>(proxy::handle(&route, req, peer, &log, progress, idle).await) }
     });
 
     let mut builder = auto::Builder::new(TokioExecutor::new());
+    // hyper's header timer also runs while an HTTP/1.1 connection waits for
+    // its next request, so it's the idle timeout there. The first request
+    // gets `handshake_timeout`, below.
     builder
         .http1()
         .timer(TokioTimer::new())
-        .header_read_timeout(state.handshake_timeout);
+        .header_read_timeout(idle);
     builder
         .http2()
         .timer(TokioTimer::new())
@@ -445,13 +445,17 @@ async fn handle_connection(
     let conn = builder.serve_connection_with_upgrades(io, service);
     tokio::pin!(conn);
 
-    // Close the connection when it's been idle too long, or on shutdown.
-    // Either way it's a graceful close: in-flight requests finish first.
-    let idle = state.idle_timeout;
+    // Close the connection if no request arrives in time, when it's been idle
+    // too long, when a request stops making progress, or on shutdown. Idle
+    // and shutdown closes are graceful: in-flight requests finish first.
     let mut closing = false;
+    let mut hard_deadline: Option<Instant> = None;
     loop {
-        let idle_deadline = activity.load(Ordering::Relaxed) + idle.as_millis() as u64;
-        let sleep_for = Duration::from_millis(idle_deadline.saturating_sub(now_ms()));
+        let due = activity.due(state.handshake_timeout, idle);
+        let wake = match due {
+            Due::Idle(_) if closing => None,
+            Due::FirstRequest(at) | Due::Idle(at) | Due::Stalled(at) => Some(at),
+        };
         tokio::select! {
             result = conn.as_mut() => {
                 if let Err(e) = result {
@@ -463,13 +467,44 @@ async fn handle_connection(
                 closing = true;
                 conn.as_mut().graceful_shutdown();
             }
-            _ = tokio::time::sleep(sleep_for), if !closing => {
-                if now_ms() >= activity.load(Ordering::Relaxed) + idle.as_millis() as u64 {
-                    closing = true;
-                    conn.as_mut().graceful_shutdown();
+            _ = sleep_until_ms(wake) => {
+                match activity.due(state.handshake_timeout, idle) {
+                    Due::FirstRequest(at) if now_ms() >= at => {
+                        tracing::debug!("connection from {peer}: no request within the handshake timeout");
+                        return;
+                    }
+                    Due::Stalled(at) if now_ms() >= at => {
+                        tracing::debug!("connection from {peer}: a request made no progress; closing");
+                        return;
+                    }
+                    Due::Idle(at) if now_ms() >= at && !closing => {
+                        closing = true;
+                        // A client that stops reading could hold a graceful
+                        // close open forever.
+                        hard_deadline = Some(Instant::now() + state.handshake_timeout);
+                        conn.as_mut().graceful_shutdown();
+                    }
+                    _ => {}
                 }
             }
+            _ = activity.changed.notified() => {}
+            _ = sleep_until(hard_deadline) => return,
         }
+    }
+}
+
+/// Sleeps until `at` (milliseconds on the [`now_ms`] clock), or forever.
+async fn sleep_until_ms(at: Option<u64>) {
+    match at {
+        Some(at) => tokio::time::sleep(Duration::from_millis(at.saturating_sub(now_ms()))).await,
+        None => std::future::pending().await,
+    }
+}
+
+async fn sleep_until(at: Option<Instant>) {
+    match at {
+        Some(at) => tokio::time::sleep_until(at.into()).await,
+        None => std::future::pending().await,
     }
 }
 
@@ -565,67 +600,114 @@ fn strip_port(host: &str) -> &str {
     }
 }
 
-fn now_ms() -> u64 {
+/// Milliseconds since ferry started, for timeouts.
+pub fn now_ms() -> u64 {
     static START: OnceLock<Instant> = OnceLock::new();
     START.get_or_init(Instant::now).elapsed().as_millis() as u64
 }
 
-/// Records the time of the last read or write on a stream.
-struct Tracked<T> {
-    inner: T,
-    last: Arc<AtomicU64>,
+/// What's happening on one client connection, for its timeouts. Activity is
+/// counted per request (requests arriving, response headers, body bytes in
+/// either direction), not per socket read or write, so HTTP/2 keep-alive
+/// pings don't keep an idle connection open.
+pub struct Activity {
+    opened: u64,
+    state: Mutex<ActivityState>,
+    /// Woken when a request starts or finishes, which can bring the next
+    /// deadline forward.
+    changed: tokio::sync::Notify,
 }
 
-impl<T: AsyncRead + Unpin> AsyncRead for Tracked<T> {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        let result = Pin::new(&mut self.inner).poll_read(cx, buf);
-        if result.is_ready() {
-            self.last.store(now_ms(), Ordering::Relaxed);
+#[derive(Default)]
+struct ActivityState {
+    /// Requests that may still be in flight.
+    requests: Vec<Weak<Progress>>,
+    /// When the last request finished; `None` before the first.
+    last_done: Option<u64>,
+}
+
+/// What a connection is waiting for, and when it's due (on the [`now_ms`]
+/// clock).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Due {
+    /// No request has arrived yet.
+    FirstRequest(u64),
+    /// No requests are in flight.
+    Idle(u64),
+    /// The longest a request in flight can go without progress.
+    Stalled(u64),
+}
+
+impl Activity {
+    fn new() -> Activity {
+        Activity {
+            opened: now_ms(),
+            state: Mutex::new(ActivityState::default()),
+            changed: tokio::sync::Notify::new(),
         }
-        result
+    }
+
+    /// Records a request starting. It's in flight until the returned value
+    /// and every clone of it are dropped.
+    fn start(self: &Arc<Self>) -> Arc<Progress> {
+        let progress = Arc::new(Progress {
+            last: AtomicU64::new(now_ms()),
+            conn: self.clone(),
+        });
+        let mut state = self.state.lock().unwrap();
+        state.requests.retain(|r| r.strong_count() > 0);
+        state.requests.push(Arc::downgrade(&progress));
+        drop(state);
+        self.changed.notify_one();
+        progress
+    }
+
+    fn due(&self, handshake: Duration, idle: Duration) -> Due {
+        let (handshake, idle) = (millis(handshake), millis(idle));
+        let mut state = self.state.lock().unwrap();
+        state.requests.retain(|r| r.strong_count() > 0);
+        let oldest = state
+            .requests
+            .iter()
+            .filter_map(Weak::upgrade)
+            .map(|p| p.last.load(Ordering::Relaxed))
+            .min();
+        match (oldest, state.last_done) {
+            // A request waiting on its upstream gets `idle` before it's
+            // answered 504; this leaves time for that.
+            (Some(last), _) => Due::Stalled(last.saturating_add(idle).saturating_add(handshake)),
+            (None, Some(done)) => Due::Idle(done.saturating_add(idle)),
+            (None, None) => Due::FirstRequest(self.opened.saturating_add(handshake)),
+        }
     }
 }
 
-impl<T: AsyncWrite + Unpin> AsyncWrite for Tracked<T> {
-    fn poll_write(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<io::Result<usize>> {
-        let result = Pin::new(&mut self.inner).poll_write(cx, buf);
-        if result.is_ready() {
-            self.last.store(now_ms(), Ordering::Relaxed);
-        }
-        result
+/// One request's progress. Body frames and the response's arrival update it.
+pub struct Progress {
+    last: AtomicU64,
+    conn: Arc<Activity>,
+}
+
+impl Progress {
+    pub fn touch(&self) {
+        self.last.store(now_ms(), Ordering::Relaxed);
     }
 
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.inner).poll_flush(cx)
+    /// When the request last made progress, on the [`now_ms`] clock.
+    pub fn last(&self) -> u64 {
+        self.last.load(Ordering::Relaxed)
     }
+}
 
-    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.inner).poll_shutdown(cx)
+impl Drop for Progress {
+    fn drop(&mut self) {
+        self.conn.state.lock().unwrap().last_done = Some(now_ms());
+        self.conn.changed.notify_one();
     }
+}
 
-    fn poll_write_vectored(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        bufs: &[io::IoSlice<'_>],
-    ) -> Poll<io::Result<usize>> {
-        let result = Pin::new(&mut self.inner).poll_write_vectored(cx, bufs);
-        if result.is_ready() {
-            self.last.store(now_ms(), Ordering::Relaxed);
-        }
-        result
-    }
-
-    fn is_write_vectored(&self) -> bool {
-        self.inner.is_write_vectored()
-    }
+fn millis(d: Duration) -> u64 {
+    u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]

@@ -487,8 +487,13 @@ that parse those formats need their date format set accordingly.)
 - `--max-body` rejects larger requests with `413`, for both `Content-Length`
   and chunked bodies.
 - Answers `502` with an explanation when the upstream can't be reached, and
-  `504` when connecting times out. Browsers get a small HTML page; other
-  clients get plain text.
+  `504` when connecting times out or the upstream doesn't start answering
+  within `idle_timeout`. Browsers get a small HTML page; other clients get
+  plain text.
+- Closes a connection that sends no request within `handshake_timeout`, one
+  with no requests for `idle_timeout` (HTTP/1.1 and HTTP/2 alike), and one
+  where a request has stopped moving: no bytes either way for longer than
+  that. Slow transfers that keep moving are fine.
 
 ## Running in the background
 
@@ -576,8 +581,8 @@ Load it with `launchctl load ~/Library/LaunchAgents/local.ferry.plist`.
 | Access log                       | stdout, `combined`                     | `--access-log`, `--log-format`, `-q`          |
 | Error log                        | stderr                                 | `--error-log`                                 |
 | Upstream connect timeout         | 5s                                     | `[advanced] connect_timeout`                  |
-| TLS handshake + request headers  | 15s                                    | `[advanced] handshake_timeout`                |
-| Idle connections                 | 90s                                    | `[advanced] idle_timeout`                     |
+| TLS handshake + first request    | 15s                                    | `[advanced] handshake_timeout`                |
+| Idle connections, stalled requests | 90s                                  | `[advanced] idle_timeout`                     |
 | Shutdown grace period            | 10s                                    | `[advanced] shutdown_grace`                   |
 | QR codes for phones in the banner | on, when stderr is a terminal         | `[advanced] qr_code`                          |
 | Local CA name constraints        | on (local names, private addresses)    | `[advanced] ca_name_constraints`              |

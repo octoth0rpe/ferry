@@ -77,9 +77,10 @@ pub enum LogFormat {
 pub struct Advanced {
     /// Time allowed to connect to an upstream.
     pub connect_timeout: Duration,
-    /// Time allowed for a client's TLS handshake and request headers.
+    /// Time allowed for a client's TLS handshake and first request.
     pub handshake_timeout: Duration,
-    /// How long idle keep-alive connections are kept open.
+    /// How long a connection is kept with no requests, and how long a
+    /// request may go with nothing moving.
     pub idle_timeout: Duration,
     /// How long in-flight requests get to finish on shutdown.
     pub shutdown_grace: Duration,

@@ -47,8 +47,8 @@ upstream = 6006            # or "10.0.0.5:6006", "http://app:8080", "/run/app.so
 # Settings almost nobody needs to change. Defaults shown.
 # [advanced]
 # connect_timeout   = "5s"   # connecting to an upstream
-# handshake_timeout = "15s"  # client TLS handshake and request headers
-# idle_timeout      = "90s"  # idle keep-alive connections
+# handshake_timeout = "15s"  # client TLS handshake and first request
+# idle_timeout      = "90s"  # idle connections; requests with nothing moving
 # shutdown_grace    = "10s"  # in-flight requests on shutdown
 # qr_code           = true   # QR codes in the banner for phones (the CA, each app)
 # ca_name_constraints = true # limit a new local CA to local names and private

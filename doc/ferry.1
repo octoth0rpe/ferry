@@ -239,8 +239,8 @@ max_body = "100M"                 # this listener's own limit
 
 [advanced]                        # defaults shown
 connect_timeout = "5s"            # connecting to an upstream
-handshake_timeout = "15s"         # TLS handshake and request headers
-idle_timeout = "90s"              # idle keep\-alive connections
+handshake_timeout = "15s"         # TLS handshake and the first request
+idle_timeout = "90s"              # idle connections, stalled requests
 shutdown_grace = "10s"            # in\-flight requests on shutdown
 qr_code = true                    # QR codes in the banner for phones
 ca_name_constraints = true        # limit a new local CA to local names
@@ -351,7 +351,17 @@ listens on the ports it is given.
 .PP
 When an upstream cannot be reached, ferry answers 502 with a short
 explanation (HTML for browsers, plain text otherwise), or 504 if connecting
-timed out.
+timed out or the upstream didn't start answering within
+.BR idle_timeout .
+.PP
+A connection that sends no request within
+.B handshake_timeout
+is closed, as is one with no requests in flight for
+.BR idle_timeout ,
+over HTTP/1.1 and HTTP/2 alike. So is one where a request has stopped
+moving, with no bytes either way for longer than
+.BR idle_timeout ;
+slow transfers that keep moving are not affected.
 .SH SIGNALS
 .TP
 .BR SIGTERM ", " SIGINT

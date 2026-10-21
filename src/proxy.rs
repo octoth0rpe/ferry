@@ -24,6 +24,7 @@ use hyper_util::rt::TokioIo;
 use crate::config::format_duration;
 use crate::log::{AccessLogger, Pending};
 use crate::mapping::Upstream;
+use crate::server::{Progress, now_ms};
 use crate::upstream::{Body, BoxError, Client, base_uri};
 
 pub const X_REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
@@ -84,20 +85,27 @@ impl Route {
 }
 
 /// Forwards one request to the route's upstream and returns its response, or
-/// an error page explaining what went wrong.
+/// an error page explaining what went wrong. `progress` is updated as the
+/// request moves; one that waits `stall` for its upstream with nothing
+/// moving is answered 504.
 pub async fn handle(
     route: &Route,
     req: Request<Incoming>,
     peer: SocketAddr,
     logger: &Arc<AccessLogger>,
+    progress: Arc<Progress>,
+    stall: Duration,
 ) -> Response<Body> {
     let pending = Pending::new(&req, peer);
     let html = wants_html(req.headers());
     let request_id = request_id(req.headers());
 
     crate::child::wait_for(&route.upstream).await;
-    let mut resp = forward(route, req, peer, &request_id, html).await;
+    progress.touch();
+    let mut resp = forward(route, req, peer, &request_id, html, &progress, stall).await;
+    progress.touch();
     resp.headers_mut().insert(X_REQUEST_ID, request_id.clone());
+    let resp = resp.map(|inner| Progressed { inner, progress }.boxed());
     pending.finish(
         resp,
         logger.clone(),
@@ -112,6 +120,8 @@ async fn forward(
     peer: SocketAddr,
     request_id: &HeaderValue,
     html: bool,
+    progress: &Arc<Progress>,
+    stall: Duration,
 ) -> Response<Body> {
     if let (Some(limit), Some(len)) = (route.max_body, content_length(req.headers()))
         && len > limit
@@ -160,6 +170,10 @@ async fn forward(
     headers.insert(X_REQUEST_ID, request_id.clone());
 
     let exceeded = Arc::new(AtomicBool::new(false));
+    let body = Progressed {
+        inner: body,
+        progress: progress.clone(),
+    };
     let body: Body = match route.max_body {
         Some(limit) => LimitedBody {
             inner: body,
@@ -176,7 +190,11 @@ async fn forward(
     *upstream_req.version_mut() = Version::HTTP_11;
     *upstream_req.headers_mut() = headers;
 
-    let mut resp = match route.client.request(upstream_req).await {
+    let response = route.client.request(upstream_req);
+    let Some(response) = until_stalled(response, progress, stall).await else {
+        return stalled(route, stall, request_id, html);
+    };
+    let mut resp = match response {
         Ok(resp) => resp,
         Err(_) if exceeded.load(Ordering::Relaxed) => return too_large(html),
         Err(e) => return upstream_error(route, &e, request_id, html),
@@ -190,6 +208,28 @@ async fn forward(
         _ => strip_hop_by_hop(resp.headers_mut()),
     }
     resp.map(|b| b.map_err(BoxError::from).boxed())
+}
+
+/// Waits for `fut`, or returns `None` once `progress` has stood still for
+/// `stall`. A request body still uploading counts as progress.
+async fn until_stalled<F: Future>(
+    fut: F,
+    progress: &Progress,
+    stall: Duration,
+) -> Option<F::Output> {
+    tokio::pin!(fut);
+    let stall = u64::try_from(stall.as_millis()).unwrap_or(u64::MAX);
+    loop {
+        let due = progress.last().saturating_add(stall);
+        tokio::select! {
+            out = &mut fut => return Some(out),
+            _ = tokio::time::sleep(Duration::from_millis(due.saturating_sub(now_ms()))) => {
+                if now_ms() >= progress.last().saturating_add(stall) {
+                    return None;
+                }
+            }
+        }
+    }
 }
 
 /// Copies bytes both ways between an upgraded client and upstream connection.
@@ -337,6 +377,20 @@ fn upstream_error(
     error_page(status, &message, html)
 }
 
+fn stalled(route: &Route, stall: Duration, request_id: &HeaderValue, html: bool) -> Response<Body> {
+    let message = format!(
+        "ferry: {} didn't respond within {}.",
+        route.target(),
+        format_duration(stall)
+    );
+    tracing::warn!(
+        "{} (request {})",
+        message.trim_start_matches("ferry: "),
+        request_id.to_str().unwrap_or("-")
+    );
+    error_page(StatusCode::GATEWAY_TIMEOUT, &message, html)
+}
+
 fn io_error_kind(err: &(dyn std::error::Error + 'static)) -> Option<io::ErrorKind> {
     let mut source = Some(err);
     while let Some(e) = source {
@@ -394,10 +448,45 @@ pub fn escape_html(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
+/// A body that records progress each time a frame goes through it.
+struct Progressed<B> {
+    inner: B,
+    progress: Arc<Progress>,
+}
+
+impl<B> hyper::body::Body for Progressed<B>
+where
+    B: hyper::body::Body<Data = Bytes> + Unpin,
+    B::Error: Into<BoxError>,
+{
+    type Data = Bytes;
+    type Error = BoxError;
+
+    fn poll_frame(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Bytes>, BoxError>>> {
+        let this = self.get_mut();
+        let frame = ready!(Pin::new(&mut this.inner).poll_frame(cx));
+        if frame.is_some() {
+            this.progress.touch();
+        }
+        Poll::Ready(frame.map(|r| r.map_err(Into::into)))
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.inner.is_end_stream()
+    }
+
+    fn size_hint(&self) -> SizeHint {
+        self.inner.size_hint()
+    }
+}
+
 /// A request body that fails once more than `remaining` bytes have been read,
 /// recording that it did so the proxy can answer 413.
 struct LimitedBody {
-    inner: Incoming,
+    inner: Progressed<Incoming>,
     remaining: u64,
     exceeded: Arc<AtomicBool>,
 }
@@ -413,7 +502,7 @@ impl hyper::body::Body for LimitedBody {
         let this = self.get_mut();
         let frame = match ready!(Pin::new(&mut this.inner).poll_frame(cx)) {
             Some(Ok(frame)) => frame,
-            other => return Poll::Ready(other.map(|r| r.map_err(BoxError::from))),
+            other => return Poll::Ready(other),
         };
         if let Some(data) = frame.data_ref() {
             let len = data.len() as u64;
