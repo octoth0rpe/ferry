@@ -596,6 +596,59 @@ WantedBy=multi-user.target
 
 Load it with `launchctl load ~/Library/LaunchAgents/local.ferry.plist`.
 
+## Running on the internet
+
+ferry's defaults hold up on a public server as well as a laptop. Without
+any configuration it:
+
+- raises its open-file limit and caps connections to fit it, so a flood of
+  connections queues instead of exhausting file descriptors;
+- closes connections that send no request within 15 seconds, sit idle for
+  90, or have a request that's stopped moving, and closes WebSockets that
+  go quiet for 90 seconds;
+- tells only clients on private networks which upstream failed and why;
+- sets `X-Real-IP` itself, drops a client's `Forwarded`, and refuses
+  `CONNECT`;
+- warns when a certificate is close to expiring, at startup, on reload and
+  daily;
+- answers the local CA's trust page only for private networks.
+
+What's left to you:
+
+- **Give it a certificate.** The local CA is for your own devices and
+  private networks; visitors from the internet would get warnings, and
+  ferry says so at startup. With certbot, point `cert` and `key` at
+  `/etc/letsencrypt/live/example.com/fullchain.pem` and `privkey.pem`;
+  ferry picks up renewals by itself. If ferry runs as its own user, it needs
+  to be able to read the key, which certbot keeps readable by root only: a
+  deploy hook (`--deploy-hook`) that copies the pair to `/etc/ferry` owned
+  by that user does it.
+- **Run it under a supervisor**, such as [systemd](#systemd), without `-d`.
+  On top of the unit above, these lock it down further:
+
+  ```ini
+  NoNewPrivileges=true
+  ProtectSystem=strict
+  ProtectHome=true
+  PrivateTmp=true
+  # Only if ferry writes log files:
+  LogsDirectory=ferry
+  ```
+
+- **Open only the ports you serve** in the firewall, usually 80 and 443.
+  ferry listens on nothing else (the trust page only exists with the local
+  CA).
+- **Set `max_body`** unless your app takes large uploads; there's no limit by
+  default.
+- **Keep your app private:** on a Unix socket, or bound to `127.0.0.1`. For
+  the client's address, use `X-Real-IP` or the last entry of
+  `X-Forwarded-For`; earlier entries come from the client.
+- **Rotate log files** with `SIGUSR1` (`postrotate systemctl kill -s USR1
+  ferry`), or leave the logs on stdout and stderr for the journal.
+- **Limit connections per client** if one client using them all matters to
+  you: ferry caps connections overall, not per client. Use your firewall
+  (`nft` meters, `iptables` `connlimit`) or a CDN in front.
+
 ## Defaults
 
 | Setting                          | Default                                | Change it with                                |
