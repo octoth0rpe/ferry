@@ -267,8 +267,10 @@ on Linux, as
 .I ca.pem
 and
 .IR ca\-key.pem .
-It is valid for 10 years. Trust it once on each device and every ferry on
-this machine works there without warnings.
+It is valid for 10 years, and replaced a month before it expires. Trust it
+once on each device and every ferry on this machine works there without
+warnings. If the stored CA exists but cannot be used, ferry stops with the
+reason rather than replace it.
 .PP
 The CA has name constraints: it can only vouch for localhost, names ending in
 .IR .local ,

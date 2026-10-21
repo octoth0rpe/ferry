@@ -313,7 +313,10 @@ the first time and keeps it, with its key, at:
 - macOS: `~/Library/Application Support/ferry/ca.pem`
 - Linux: `~/.local/share/ferry/ca.pem` (or `$XDG_DATA_HOME/ferry/`)
 
-The CA is valid for 10 years. It has *name constraints*: it can only vouch
+The CA is valid for 10 years; ferry makes a new one a month before it
+expires. If the stored CA exists but can't be used (say its key isn't
+readable), ferry stops with the reason rather than replace it, since devices
+that trust it would stop working. It has *name constraints*: it can only vouch
 for `localhost`, names ending in `.local`, and loopback and private
 addresses. A trusted CA can otherwise vouch for any site, so this limits the
 damage if its key ever leaks (Android ignores name constraints, so there the

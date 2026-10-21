@@ -3,6 +3,8 @@ mod common;
 use rustls::pki_types::CertificateDer;
 use rustls::pki_types::pem::PemObject;
 
+use std::time::Duration;
+
 use common::*;
 
 fn root_der(ferry: &Ferry) -> Vec<u8> {
@@ -188,6 +190,38 @@ async fn root_is_kept_and_server_certificate_reissued_across_restarts() {
     let err = ferry.wait_for_stderr("Browsers will warn until you trust the CA");
     assert!(!err.contains("created ferry's local CA"), "{err}");
     assert!(!err.contains("now uses a local CA"), "{err}");
+}
+
+#[tokio::test]
+async fn a_root_that_cant_be_used_is_left_for_a_person_to_fix() {
+    let port = free_port();
+    let ferry = Ferry::start(&[&format!("{port}:1")], port);
+    let root = root_der(&ferry);
+    let home = ferry.stop();
+    let key = data_dir(&home).join("ca-key.pem");
+    std::fs::write(&key, "not a key").unwrap();
+
+    let mut ferry = Ferry::spawn_in(home, &[&format!("{port}:1")]);
+    assert_eq!(ferry.wait(Duration::from_secs(10)), Some(1));
+    let err = ferry.stderr();
+    assert!(err.contains("ferry's local CA can't be used"), "{err}");
+    assert!(err.contains("won't replace it"), "{err}");
+    assert!(err.contains("ca-key.pem to make a new CA"), "{err}");
+    // Nothing was overwritten.
+    assert_eq!(std::fs::read_to_string(&key).unwrap(), "not a key");
+    assert_eq!(root_der(&ferry), root);
+
+    // -t says the same.
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_ferry"))
+        .args(["-t", &format!("{port}:1")])
+        .env("HOME", &ferry.home.0)
+        .env("XDG_DATA_HOME", ferry.home.path("share"))
+        .output()
+        .unwrap();
+    let text =
+        String::from_utf8_lossy(&out.stdout).into_owned() + &String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{text}");
+    assert!(text.contains("won't replace it"), "{text}");
 }
 
 #[tokio::test]

@@ -142,10 +142,11 @@ pub fn load_or_create(constrain: bool) -> Result<LocalCa, String> {
 
     let (root, created) = match load_root(&paths.root) {
         Ok(root) => (root, None),
+        Err(NoRoot::Unusable(why)) => return Err(with_home_hint(unusable_root(&paths, &why))),
         Err(why) => {
             let constraints = constrain.then(name_constraints);
             let root = create_root(&paths.root, constraints).map_err(with_home_hint)?;
-            (root, Some(why))
+            (root, Some(why.to_string()))
         }
     };
     let (cert, not_after, warnings) = issue_for(&root, &wanted, &paths).map_err(with_home_hint)?;
@@ -255,11 +256,49 @@ struct Root {
 }
 
 /// Loads the stored root. The error says why a new one is needed.
-fn load_root(paths: &CertKey) -> Result<Root, String> {
-    if !paths.cert.exists() && !paths.key.exists() {
-        return Err("none existed yet".into());
+/// Why there's no root to use.
+#[derive(Debug)]
+enum NoRoot {
+    Missing,
+    ExpiresSoon,
+    /// The files are there but can't be used. Replacing them would lose the
+    /// root devices trust, so that's left to a person.
+    Unusable(String),
+}
+
+impl std::fmt::Display for NoRoot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NoRoot::Missing => f.write_str("none existed yet"),
+            NoRoot::ExpiresSoon => f.write_str("the stored one expires soon"),
+            NoRoot::Unusable(why) => f.write_str(why),
+        }
     }
-    let unusable = |e: &dyn std::fmt::Display| format!("the stored one couldn't be loaded ({e})");
+}
+
+fn unusable_root(paths: &Paths, why: &str) -> String {
+    format!(
+        "ferry's local CA can't be used: {why}. ferry won't replace it, since devices that \
+         trust it would stop working. Fix the problem, or delete {} and {} to make a new CA \
+         (devices that trusted the old one will need to trust the new one)",
+        paths.root.cert.display(),
+        paths.root.key.display()
+    )
+}
+
+/// What's wrong with the stored root, if it exists and can't be used.
+pub fn root_problem(paths: &Paths) -> Option<String> {
+    match load_root(&paths.root) {
+        Err(NoRoot::Unusable(why)) => Some(unusable_root(paths, &why)),
+        _ => None,
+    }
+}
+
+fn load_root(paths: &CertKey) -> Result<Root, NoRoot> {
+    if !paths.cert.exists() && !paths.key.exists() {
+        return Err(NoRoot::Missing);
+    }
+    let unusable = |e: &dyn std::fmt::Display| NoRoot::Unusable(e.to_string());
     let pem = fs::read_to_string(&paths.cert)
         .map_err(|e| unusable(&format!("{}: {e}", paths.cert.display())))?;
     let der = CertificateDer::from_pem_slice(pem.as_bytes())
@@ -274,7 +313,7 @@ fn load_root(paths: &CertKey) -> Result<Root, String> {
         .common_name
         .ok_or_else(|| unusable(&"it has no common name"))?;
     if parsed.not_after - date::now() < RENEW_BEFORE_DAYS * 86_400 {
-        return Err("the stored one expires soon".into());
+        return Err(NoRoot::ExpiresSoon);
     }
     Ok(Root {
         issuer: Issuer::new(root_params(&name), key),
@@ -530,7 +569,7 @@ mod tests {
     fn creates_a_root_then_reuses_it() {
         let dir = tempdir();
         let paths = paths_in(&dir);
-        assert_eq!(load_root(&paths.root).err().unwrap(), "none existed yet");
+        assert!(matches!(load_root(&paths.root), Err(NoRoot::Missing)));
 
         let root = create_root(&paths.root, None).unwrap();
         let wanted = names(&["localhost", "127.0.0.1", "::1", "host.local"]);
@@ -593,7 +632,11 @@ mod tests {
         create_root(&paths.root, None).unwrap();
         fs::write(&paths.root.cert, "junk").unwrap();
         let e = load_root(&paths.root).err().unwrap();
-        assert!(e.starts_with("the stored one couldn't be loaded"), "{e}");
+        assert!(
+            matches!(&e, NoRoot::Unusable(why) if why.contains("ca.pem")),
+            "{e}"
+        );
+        assert!(root_problem(&paths).unwrap().contains("won't replace it"));
         let _ = fs::remove_dir_all(dir);
     }
 

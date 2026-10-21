@@ -50,6 +50,9 @@ pub fn check(config: &Config) -> Report {
                 Err(e) => report.errors.push(e),
             },
             None => match ca::paths() {
+                Ok(paths) if ca::root_problem(&paths).is_some() => {
+                    report.errors.extend(ca::root_problem(&paths));
+                }
                 Ok(paths) if paths.root.cert.exists() => report.notes.push(format!(
                     "no certificate configured; will issue one from ferry's local CA at {}",
                     paths.root.cert.display()
