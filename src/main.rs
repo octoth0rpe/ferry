@@ -79,6 +79,7 @@ fn main() -> ExitCode {
         )]);
     }
     log::init_error_log();
+    net::raise_fd_limit();
     let plan = match server::build(&config) {
         Ok(plan) => plan,
         Err(errors) => return fail(errors),
@@ -186,7 +187,7 @@ async fn run(
     let mut server = Server::new();
     let mut issued = issued(&plan);
     let mut access_log = plan.log.clone();
-    if let Err(e) = server.apply(plan.listeners, sockets) {
+    if let Err(e) = server.apply(plan.listeners, sockets, plan.max_connections) {
         return fail(vec![e.to_string()]);
     }
 
@@ -343,7 +344,7 @@ fn reload(cli: &Cli, cwd: &Path, server: &mut Server) -> Result<(Config, Reloade
         log: plan.log.clone(),
     };
     server
-        .apply(plan.listeners, sockets)
+        .apply(plan.listeners, sockets, plan.max_connections)
         .map_err(|e| vec![e.to_string()])?;
     Ok((config, reloaded))
 }

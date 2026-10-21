@@ -242,12 +242,19 @@ connect_timeout = "5s"            # connecting to an upstream
 handshake_timeout = "15s"         # TLS handshake and the first request
 idle_timeout = "90s"              # idle connections, stalled requests
 shutdown_grace = "10s"            # in\-flight requests on shutdown
+# max_connections = 10000         # default: from the open\-file limit
 qr_code = true                    # QR codes in the banner for phones
 ca_name_constraints = true        # limit a new local CA to local names
 .RE
 .fi
 .PP
 Durations accept ms, s, m and h suffixes or a plain number of seconds.
+.PP
+ferry raises its open\-file limit as far as it may at startup.
+.B max_connections
+caps the connections open at once, to clients and upstreams together, and
+by default fits within that limit. When it's reached, new clients wait to be
+accepted, and a request that needs an upstream connection is answered 503.
 .SH CERTIFICATES
 When no certificate is configured, ferry uses its own local certificate
 authority. The CA is created on first use and kept, with its key, in

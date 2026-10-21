@@ -27,7 +27,7 @@ use tokio_util::task::TaskTracker;
 use crate::config::format_duration;
 use crate::log::{AccessLogger, Pending};
 use crate::mapping::Upstream;
-use crate::server::{Progress, now_ms};
+use crate::server::{Limit, Permit, Progress, now_ms};
 use crate::upstream::{Body, BoxError, Client, base_uri};
 
 pub const X_REQUEST_ID: HeaderName = HeaderName::from_static("x-request-id");
@@ -96,6 +96,11 @@ pub struct Peer {
     pub shutdown: CancellationToken,
     /// Upgraded connections run here, so shutdown knows about them.
     pub tracker: TaskTracker,
+    /// Each request takes room in this for its upstream connection.
+    pub limit: Arc<Limit>,
+    /// This connection's room in the limit. An upgraded connection outlives
+    /// the HTTP connection, so it keeps this alive.
+    pub _permit: Permit,
 }
 
 /// Forwards one request to the route's upstream and returns its response, or
@@ -105,7 +110,7 @@ pub struct Peer {
 pub async fn handle(
     route: &Route,
     req: Request<Incoming>,
-    client: &Peer,
+    client: &Arc<Peer>,
     logger: &Arc<AccessLogger>,
     progress: Arc<Progress>,
 ) -> Response<Body> {
@@ -113,12 +118,36 @@ pub async fn handle(
     let html = wants_html(req.headers());
     let request_id = request_id(req.headers());
 
-    crate::child::wait_for(&route.upstream).await;
-    progress.touch();
-    let mut resp = forward(route, req, client, &request_id, html, &progress).await;
-    progress.touch();
+    // Room for the upstream connection, held until the response is done.
+    let mut permit = client.limit.try_acquire();
+    let mut resp = match permit {
+        None => busy(html),
+        Some(_) => {
+            crate::child::wait_for(&route.upstream).await;
+            progress.touch();
+            let resp = forward(
+                route,
+                req,
+                client,
+                &request_id,
+                html,
+                &progress,
+                &mut permit,
+            )
+            .await;
+            progress.touch();
+            resp
+        }
+    };
     resp.headers_mut().insert(X_REQUEST_ID, request_id.clone());
-    let resp = resp.map(|inner| Progressed { inner, progress }.boxed());
+    let resp = resp.map(|inner| {
+        Progressed {
+            inner,
+            progress,
+            _permit: permit,
+        }
+        .boxed()
+    });
     pending.finish(
         resp,
         logger.clone(),
@@ -130,10 +159,11 @@ pub async fn handle(
 async fn forward(
     route: &Route,
     mut req: Request<Incoming>,
-    client: &Peer,
+    client: &Arc<Peer>,
     request_id: &HeaderValue,
     html: bool,
     progress: &Arc<Progress>,
+    permit: &mut Option<Permit>,
 ) -> Response<Body> {
     let stall = client.idle;
     if let (Some(limit), Some(len)) = (route.max_body, content_length(req.headers()))
@@ -186,6 +216,7 @@ async fn forward(
     let body = Progressed {
         inner: body,
         progress: progress.clone(),
+        _permit: None,
     };
     let body: Body = match route.max_body {
         Some(limit) => LimitedBody {
@@ -216,10 +247,11 @@ async fn forward(
     match (resp.status(), client_upgrade) {
         (StatusCode::SWITCHING_PROTOCOLS, Some(client_upgrade)) => {
             let upstream_upgrade = hyper::upgrade::on(&mut resp);
-            let (idle, shutdown) = (client.idle, client.shutdown.clone());
+            // The tunnel holds both connections' room in the limit.
+            let held = (client.clone(), permit.take());
             client
                 .tracker
-                .spawn(tunnel(client_upgrade, upstream_upgrade, idle, shutdown));
+                .spawn(tunnel(client_upgrade, upstream_upgrade, held));
         }
         _ => strip_hop_by_hop(resp.headers_mut()),
     }
@@ -249,14 +281,14 @@ async fn until_stalled<F: Future>(
 }
 
 /// Copies bytes both ways between an upgraded client and upstream
-/// connection, until either side closes, nothing has moved for `idle`, or
-/// ferry shuts down.
+/// connection, until either side closes, nothing has moved for the idle
+/// timeout, or ferry shuts down.
 async fn tunnel(
     client: OnUpgrade,
     upstream: OnUpgrade,
-    idle: Duration,
-    shutdown: CancellationToken,
+    (peer, _permit): (Arc<Peer>, Option<Permit>),
 ) {
+    let (idle, shutdown) = (peer.idle, &peer.shutdown);
     let (client, upstream) = match tokio::try_join!(client, upstream) {
         Ok(both) => both,
         Err(e) => {
@@ -467,6 +499,14 @@ fn upstream_error(
     error_page(status, &message, html)
 }
 
+fn busy(html: bool) -> Response<Body> {
+    error_page(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "ferry: too many connections are open right now. Try again shortly.",
+        html,
+    )
+}
+
 fn stalled(route: &Route, stall: Duration, request_id: &HeaderValue, html: bool) -> Response<Body> {
     let message = format!(
         "ferry: {} didn't respond within {}.",
@@ -538,10 +578,12 @@ pub fn escape_html(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
-/// A body that records progress each time a frame goes through it.
+/// A body that records progress each time a frame goes through it, and
+/// holds the request's room in the connection limit until it's done.
 struct Progressed<B> {
     inner: B,
     progress: Arc<Progress>,
+    _permit: Option<Permit>,
 }
 
 impl<B> hyper::body::Body for Progressed<B>

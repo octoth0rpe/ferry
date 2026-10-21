@@ -64,7 +64,8 @@ enable it once per clone with `git config core.hooksPath .githooks` (needs
 - `date.rs`: UTC civil-date arithmetic (days ↔ y/m/d) and formatting. No
   time zones: ferry writes everything in UTC.
 - `check.rs` (`-t`), `banner.rs` (including the QR code), `watch.rs`
-  (reload triggers), `daemon.rs` (`-d`, pid file), `net.rs` (binding).
+  (reload triggers), `daemon.rs` (`-d`, pid file), `net.rs` (binding, the
+  open-file limit).
 
 ## Conventions
 

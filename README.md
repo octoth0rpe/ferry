@@ -492,6 +492,9 @@ that parse those formats need their date format set accordingly.)
   `504` when connecting times out or the upstream doesn't start answering
   within `idle_timeout`. Browsers get a small HTML page; other clients get
   plain text.
+- Raises its open-file limit at startup, and caps connections (clients and
+  upstreams together) to fit it. At the cap, new clients wait to be
+  accepted, and requests that need an upstream connection get `503`.
 - Closes a connection that sends no request within `handshake_timeout`, one
   with no requests for `idle_timeout` (HTTP/1.1 and HTTP/2 alike), and one
   where a request has stopped moving: no bytes either way for longer than
@@ -586,6 +589,7 @@ Load it with `launchctl load ~/Library/LaunchAgents/local.ferry.plist`.
 | TLS handshake + first request    | 15s                                    | `[advanced] handshake_timeout`                |
 | Idle connections, stalled requests | 90s                                  | `[advanced] idle_timeout`                     |
 | Shutdown grace period            | 10s                                    | `[advanced] shutdown_grace`                   |
+| Connections open at once         | from the open-file limit               | `[advanced] max_connections`                  |
 | QR codes for phones in the banner | on, when stderr is a terminal         | `[advanced] qr_code`                          |
 | Local CA name constraints        | on (local names, private addresses)    | `[advanced] ca_name_constraints`              |
 

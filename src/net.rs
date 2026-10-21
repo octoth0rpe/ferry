@@ -115,6 +115,30 @@ pub fn canonical(addr: SocketAddr) -> SocketAddr {
     SocketAddr::new(addr.ip().to_canonical(), addr.port())
 }
 
+/// Raises the open-file limit as far as this process may (the soft limit to
+/// the hard one), since busy sites need far more than the usual 256 or 1024.
+pub fn raise_fd_limit() {
+    use nix::sys::resource::{Resource, getrlimit, setrlimit};
+    let Ok((soft, hard)) = getrlimit(Resource::RLIMIT_NOFILE) else {
+        return;
+    };
+    // macOS refuses more than OPEN_MAX, even when the hard limit is unlimited.
+    for want in [hard, 10240] {
+        if want <= soft {
+            return;
+        }
+        if setrlimit(Resource::RLIMIT_NOFILE, want, hard).is_ok() {
+            return;
+        }
+    }
+}
+
+/// The open-file limit, capped at a million.
+pub fn fd_limit() -> u64 {
+    use nix::sys::resource::{Resource, getrlimit};
+    getrlimit(Resource::RLIMIT_NOFILE).map_or(1024, |(soft, _)| soft.min(1 << 20))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

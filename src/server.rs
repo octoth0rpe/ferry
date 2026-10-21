@@ -19,6 +19,7 @@ use hyper::service::service_fn;
 use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use hyper_util::server::conn::auto;
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_rustls::TlsAcceptor;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -87,6 +88,8 @@ pub struct Plan {
     pub local_ca: Option<ca::LocalCa>,
     /// The port the page for trusting the local CA ended up on, once bound.
     pub trust_port: Option<u16>,
+    /// The most connections open at once, to clients and upstreams.
+    pub max_connections: usize,
 }
 
 /// Loads certificates and builds listener state for a config. Doesn't bind.
@@ -217,6 +220,23 @@ pub fn build(config: &Config) -> Result<Plan, Vec<String>> {
         });
     }
 
+    let upstreams = config.listeners.len() as u64;
+    let max_connections = match config.advanced.max_connections {
+        Some(n) => n,
+        None => {
+            let fds = net::fd_limit();
+            let n = default_max_connections(fds, upstreams);
+            if n < 1000 {
+                warnings.push(format!(
+                    "ferry can only open {fds} files (ulimit -n), so it allows {n} \
+                     connections at once; raise the limit for a busy site \
+                     (LimitNOFILE= under systemd)"
+                ));
+            }
+            n
+        }
+    };
+
     if errors.is_empty() {
         Ok(Plan {
             listeners,
@@ -224,11 +244,22 @@ pub fn build(config: &Config) -> Result<Plan, Vec<String>> {
             warnings,
             local_ca,
             trust_port: None,
+            max_connections,
         })
     } else {
         errors.dedup();
         Err(errors)
     }
+}
+
+/// Upstream connections kept open between requests, per upstream.
+pub const POOL_SIZE: usize = 32;
+
+/// Connections that fit in the open-file limit, leaving room for logs,
+/// listening sockets and each upstream's pool of idle connections.
+fn default_max_connections(fd_limit: u64, upstreams: u64) -> usize {
+    let reserved = 64 + upstreams * POOL_SIZE as u64;
+    usize::try_from(fd_limit.saturating_sub(reserved).max(16)).unwrap_or(usize::MAX)
 }
 
 pub type Sockets = HashMap<ListenKey, std::net::TcpListener>;
@@ -274,6 +305,7 @@ pub struct Server {
     running: HashMap<ListenKey, Running>,
     shutdown: CancellationToken,
     tracker: TaskTracker,
+    limit: Arc<Limit>,
 }
 
 impl Server {
@@ -282,6 +314,7 @@ impl Server {
             running: HashMap::new(),
             shutdown: CancellationToken::new(),
             tracker: TaskTracker::new(),
+            limit: Limit::new(0),
         }
     }
 
@@ -292,6 +325,7 @@ impl Server {
         &mut self,
         specs: Vec<ListenerSpec>,
         mut sockets: HashMap<ListenKey, std::net::TcpListener>,
+        max_connections: usize,
     ) -> io::Result<()> {
         let wanted: Vec<ListenKey> = specs.iter().map(|s| s.key).collect();
         for (key, running) in self.running.extract_if(|key, _| !wanted.contains(key)) {
@@ -323,9 +357,11 @@ impl Server {
                 running.stop.clone(),
                 self.shutdown.clone(),
                 self.tracker.clone(),
+                self.limit.clone(),
             ));
             self.running.insert(spec.key, running);
         }
+        self.limit.resize(max_connections);
         Ok(())
     }
 
@@ -354,7 +390,9 @@ async fn accept_loop(
     stop: CancellationToken,
     shutdown: CancellationToken,
     tracker: TaskTracker,
+    limit: Arc<Limit>,
 ) {
+    let mut failures = RateLimited::default();
     loop {
         let (stream, peer) = tokio::select! {
             _ = stop.cancelled() => return,
@@ -362,12 +400,23 @@ async fn accept_loop(
             accepted = listener.accept() => match accepted {
                 Ok(conn) => conn,
                 Err(e) => {
-                    // Usually running out of file descriptors; back off.
-                    tracing::error!("accept failed: {e}");
+                    // Usually running out of file descriptors, from
+                    // something other than connections; back off.
+                    if let Some(more) = failures.due() {
+                        tracing::error!("accept failed: {e}{more}");
+                    }
                     tokio::time::sleep(Duration::from_millis(100)).await;
                     continue;
                 }
             },
+        };
+        // Waiting for room before accepting the next one leaves the rest
+        // queued in the kernel, rather than failing for lack of file
+        // descriptors.
+        let permit = tokio::select! {
+            _ = stop.cancelled() => return,
+            _ = shutdown.cancelled() => return,
+            permit = limit.acquire() => permit,
         };
         let state = state.read().unwrap().clone();
         tracker.spawn(handle_connection(
@@ -376,7 +425,135 @@ async fn accept_loop(
             state,
             shutdown.clone(),
             tracker.clone(),
+            (limit.clone(), permit),
         ));
+    }
+}
+
+/// Lets a repeated message through once a minute, saying how many were held
+/// back in between.
+#[derive(Default)]
+struct RateLimited {
+    last: Option<Instant>,
+    held: u64,
+}
+
+impl RateLimited {
+    /// `Some` with a suffix for the message when it's due, else `None`.
+    fn due(&mut self) -> Option<String> {
+        if self
+            .last
+            .is_some_and(|t| t.elapsed() < Duration::from_secs(60))
+        {
+            self.held += 1;
+            return None;
+        }
+        self.last = Some(Instant::now());
+        let more = match std::mem::take(&mut self.held) {
+            0 => String::new(),
+            n => format!(" (and {n} more times in the last minute)"),
+        };
+        Some(more)
+    }
+}
+
+/// Caps the connections open at once, to clients and upstreams together, so
+/// ferry doesn't run out of file descriptors. Can be resized on reload.
+pub struct Limit {
+    sem: Arc<Semaphore>,
+    state: Mutex<LimitState>,
+}
+
+struct LimitState {
+    size: usize,
+    /// Permits to drop as they come back, after shrinking below what's in
+    /// use.
+    debt: usize,
+    full: RateLimited,
+}
+
+/// Room for one connection, given back when dropped.
+pub struct Permit {
+    permit: Option<OwnedSemaphorePermit>,
+    limit: Arc<Limit>,
+}
+
+impl Limit {
+    fn new(size: usize) -> Arc<Limit> {
+        Arc::new(Limit {
+            sem: Arc::new(Semaphore::new(size)),
+            state: Mutex::new(LimitState {
+                size,
+                debt: 0,
+                full: RateLimited::default(),
+            }),
+        })
+    }
+
+    fn resize(&self, size: usize) {
+        let mut state = self.state.lock().unwrap();
+        if size >= state.size {
+            let grow = size - state.size;
+            let repaid = grow.min(state.debt);
+            state.debt -= repaid;
+            self.sem.add_permits(grow - repaid);
+        } else {
+            let shrink = state.size - size;
+            state.debt += shrink - self.sem.forget_permits(shrink);
+        }
+        state.size = size;
+    }
+
+    /// Waits for room for a connection.
+    async fn acquire(self: &Arc<Self>) -> Permit {
+        if let Some(permit) = self.try_acquire() {
+            return permit;
+        }
+        let permit = self
+            .sem
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("never closed");
+        self.permit(permit)
+    }
+
+    /// Room for a connection, if there is some now.
+    pub fn try_acquire(self: &Arc<Self>) -> Option<Permit> {
+        match self.sem.clone().try_acquire_owned() {
+            Ok(permit) => Some(self.permit(permit)),
+            Err(_) => {
+                let mut state = self.state.lock().unwrap();
+                let size = state.size;
+                if let Some(more) = state.full.due() {
+                    tracing::warn!(
+                        "{size} connections open, ferry's limit (max_connections): new \
+                         clients wait, and requests that need an upstream connection \
+                         get 503{more}"
+                    );
+                }
+                None
+            }
+        }
+    }
+
+    fn permit(self: &Arc<Self>, permit: OwnedSemaphorePermit) -> Permit {
+        Permit {
+            permit: Some(permit),
+            limit: self.clone(),
+        }
+    }
+}
+
+impl Drop for Permit {
+    fn drop(&mut self) {
+        let mut state = self.limit.state.lock().unwrap();
+        if state.debt > 0
+            && let Some(permit) = self.permit.take()
+        {
+            state.debt -= 1;
+            permit.forget();
+        }
     }
 }
 
@@ -390,6 +567,7 @@ async fn handle_connection(
     state: Arc<ListenerState>,
     shutdown: CancellationToken,
     tracker: TaskTracker,
+    (limit, permit): (Arc<Limit>, Permit),
 ) {
     let _ = stream.set_nodelay(true);
     // So the kernel notices peers that vanished without closing, such as a
@@ -436,6 +614,8 @@ async fn handle_connection(
         idle,
         shutdown: shutdown.clone(),
         tracker,
+        limit,
+        _permit: permit,
     });
     let service = service_fn(move |req: Request<Incoming>| {
         let route = route.clone();
@@ -810,6 +990,37 @@ mod tests {
             redirect("[::1]:8080", "/", Some(8443)),
             (308, Some("https://[::1]:8443/".into()))
         );
+    }
+
+    #[tokio::test]
+    async fn the_connection_limit_resizes_while_in_use() {
+        let limit = Limit::new(2);
+        let a = limit.try_acquire().unwrap();
+        let b = limit.try_acquire().unwrap();
+        assert!(limit.try_acquire().is_none());
+
+        // Shrinking below what's in use takes effect as places come back.
+        limit.resize(1);
+        drop(a);
+        assert!(limit.try_acquire().is_none());
+        drop(b);
+        let c = limit.try_acquire().unwrap();
+        assert!(limit.try_acquire().is_none());
+
+        // Growing again repays that first.
+        limit.resize(3);
+        let d = limit.try_acquire().unwrap();
+        let e = limit.try_acquire().unwrap();
+        assert!(limit.try_acquire().is_none());
+        drop((c, d, e));
+        assert_eq!(limit.sem.available_permits(), 3);
+    }
+
+    #[test]
+    fn default_connection_limit_fits_the_open_file_limit() {
+        assert_eq!(default_max_connections(10240, 1), 10240 - 64 - 32);
+        assert_eq!(default_max_connections(256, 2), 128);
+        assert_eq!(default_max_connections(64, 1), 16);
     }
 
     #[test]

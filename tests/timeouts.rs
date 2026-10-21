@@ -231,3 +231,37 @@ async fn an_upgraded_connection_stays_open_while_it_is_used() {
         echo(&mut tls, b"still here").await;
     }
 }
+
+#[tokio::test]
+async fn connections_beyond_the_limit_wait_their_turn() {
+    let (_ferry, port) = ferry_with("max_connections = 2").await;
+    let first = tls_connect(port).await;
+    let _second = tls_connect(port).await;
+    // The third is accepted by the kernel but not by ferry, so TLS stalls.
+    let third = tokio::spawn(tls_connect(port));
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(!third.is_finished(), "a third connection was served");
+    drop(first);
+    let mut third = tokio::time::timeout(Duration::from_secs(5), third)
+        .await
+        .expect("the third connection is served once there's room")
+        .unwrap();
+    // It holds one of the two places; its request needs the other.
+    drop(_second);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(get(&mut third, "/").await.starts_with("HTTP/1.1 200"));
+}
+
+#[tokio::test]
+async fn requests_get_503_when_there_is_no_room_for_an_upstream_connection() {
+    let (ferry, port) = ferry_with("max_connections = 2").await;
+    let _idle = tls_connect(port).await;
+    let mut tls = tls_connect(port).await;
+    let resp = get(&mut tls, "/").await;
+    assert!(resp.starts_with("HTTP/1.1 503"), "{resp}");
+    let err = ferry.wait_for_stderr("max_connections");
+    assert!(
+        err.contains("2 connections open, ferry's limit (max_connections)"),
+        "{err}"
+    );
+}

@@ -84,6 +84,9 @@ pub struct Advanced {
     pub idle_timeout: Duration,
     /// How long in-flight requests get to finish on shutdown.
     pub shutdown_grace: Duration,
+    /// The most connections open at once, to clients and upstreams
+    /// together. `None` works it out from the open-file limit.
+    pub max_connections: Option<usize>,
     /// Show QR codes in the banner for phones: the local CA, and each app.
     pub qr_code: bool,
     /// Give a new local CA name constraints, so it can only vouch for local
@@ -98,6 +101,7 @@ impl Default for Advanced {
             handshake_timeout: Duration::from_secs(15),
             idle_timeout: Duration::from_secs(90),
             shutdown_grace: Duration::from_secs(10),
+            max_connections: None,
             qr_code: true,
             ca_name_constraints: true,
         }
@@ -267,6 +271,7 @@ impl Config {
             handshake_timeout: changed(self.advanced.handshake_timeout, defaults.handshake_timeout),
             idle_timeout: changed(self.advanced.idle_timeout, defaults.idle_timeout),
             shutdown_grace: changed(self.advanced.shutdown_grace, defaults.shutdown_grace),
+            max_connections: self.advanced.max_connections,
             qr_code: (self.advanced.qr_code != defaults.qr_code).then_some(self.advanced.qr_code),
             ca_name_constraints: (self.advanced.ca_name_constraints
                 != defaults.ca_name_constraints)
@@ -377,6 +382,8 @@ struct OutAdvanced {
     #[serde(skip_serializing_if = "Option::is_none")]
     shutdown_grace: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    max_connections: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     qr_code: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     ca_name_constraints: Option<bool>,
@@ -416,6 +423,7 @@ struct FileAdvanced {
     handshake_timeout: Option<Spanned<toml::Value>>,
     idle_timeout: Option<Spanned<toml::Value>>,
     shutdown_grace: Option<Spanned<toml::Value>>,
+    max_connections: Option<Spanned<toml::Value>>,
     qr_code: Option<bool>,
     ca_name_constraints: Option<bool>,
 }
@@ -524,6 +532,16 @@ fn load_file(path: &Path) -> Result<Config, Vec<String>> {
 
     let adv = file.advanced;
     let defaults = Advanced::default();
+    let max_connections = adv.max_connections.and_then(|v| match v.get_ref() {
+        toml::Value::Integer(n) if *n > 0 => usize::try_from(*n).ok(),
+        _ => {
+            errors.push(format!(
+                "{}: max_connections: expected a whole number above 0, like 10000",
+                at(v.span())
+            ));
+            None
+        }
+    });
     let mut duration = |v: Option<Spanned<toml::Value>>, key: &str, default: Duration| match v {
         None => default,
         Some(v) => match value_str(v.get_ref()).and_then(|s| parse_duration(&s)) {
@@ -551,6 +569,7 @@ fn load_file(path: &Path) -> Result<Config, Vec<String>> {
             "shutdown_grace",
             defaults.shutdown_grace,
         ),
+        max_connections,
         qr_code: adv.qr_code.unwrap_or(defaults.qr_code),
         ca_name_constraints: adv
             .ca_name_constraints
@@ -931,6 +950,7 @@ key = "o.key"
 
 [advanced]
 idle_timeout = "2m"
+max_connections = 500
 qr_code = false
 ca_name_constraints = false
 "#,
@@ -953,6 +973,7 @@ ca_name_constraints = false
         );
         assert!(printed.contains("idle_timeout = \"2m\""), "{printed}");
         assert!(printed.contains("qr_code = false"), "{printed}");
+        assert!(printed.contains("max_connections = 500"), "{printed}");
         assert!(printed.contains("ca_name_constraints = false"), "{printed}");
         assert!(!printed.contains("connect_timeout"), "{printed}");
     }

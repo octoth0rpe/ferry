@@ -33,6 +33,7 @@ impl Client {
         let mut builder = LegacyClient::builder(TokioExecutor::new());
         builder
             .pool_idle_timeout(idle_timeout)
+            .pool_max_idle_per_host(crate::server::POOL_SIZE)
             .pool_timer(TokioTimer::new())
             .timer(TokioTimer::new());
         match upstream {
