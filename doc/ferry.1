@@ -136,7 +136,8 @@ Write the access log to
 .B \-
 means standard output (the default);
 .B off
-disables it.
+disables it. A log that can't keep up never holds up requests: ferry queues
+up to 10,000 lines, then drops lines and says how many once it catches up.
 .TP
 .BI \-\-error\-log " file"
 Write the error log to

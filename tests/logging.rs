@@ -103,3 +103,40 @@ async fn logs_to_files_in_json() {
     );
     assert_eq!(ferry.stdout(), "");
 }
+
+#[tokio::test]
+async fn a_log_nobody_reads_doesnt_hold_up_requests() {
+    let up = tcp_upstream("127.0.0.1:0").await;
+    let port = free_port();
+    let home = TempDir::new();
+    // stdout is a pipe that's never read: it fills after 64K or so.
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_ferry"))
+        .arg(format!("{port}:{up}"))
+        .env("HOME", &home.0)
+        .env("XDG_DATA_HOME", home.path("share"))
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
+        assert!(std::time::Instant::now() < deadline, "ferry didn't start");
+        std::thread::sleep(Duration::from_millis(25));
+    }
+
+    // Long paths make long lines: a hundred requests fill the pipe.
+    let client = client(true);
+    let url = format!("https://localhost:{port}/{}", "x".repeat(1000));
+    let all = async {
+        for _ in 0..1000 {
+            let resp = client.get(&url).send().await.unwrap();
+            assert_eq!(resp.status(), 200);
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(20), all)
+        .await
+        .expect("requests stalled behind the access log");
+    let _ = child.kill();
+    let _ = child.wait();
+}

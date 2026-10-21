@@ -11,9 +11,11 @@ use std::io::{self, Write};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::task::{Context, Poll, ready};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
 use http::header::{HOST, REFERER, USER_AGENT};
@@ -25,19 +27,135 @@ use crate::config::{AccessLog, Config, ErrorLog, LogFormat};
 use crate::date;
 use crate::upstream::{Body, BoxError};
 
-/// Where log lines go.
-pub enum Sink {
+/// Where log lines go. Once ferry is running ([`write_in_background`]),
+/// lines are written by a thread of the sink's own, so a log that can't
+/// keep up (a pipe nobody reads, a stalled disk) never holds up requests:
+/// once [`QUEUE`] lines are waiting, more are dropped and counted, and the
+/// log says how many when it catches up. Before that, during startup and
+/// before `-d` forks (which would leave such a thread behind), lines are
+/// written directly.
+pub struct Sink {
+    kind: Kind,
+    out: Arc<Mutex<Out>>,
+    queue: OnceLock<SyncSender<Job>>,
+    dropped: Arc<AtomicU64>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
     Stdout,
     Stderr,
-    File { path: PathBuf, file: Mutex<File> },
+    File,
+}
+
+/// Lines waiting to be written before more are dropped.
+const QUEUE: usize = 10_000;
+
+static IN_BACKGROUND: AtomicBool = AtomicBool::new(false);
+
+/// From now on, log lines are written by background threads. Call once
+/// ferry won't fork again.
+pub fn write_in_background() {
+    IN_BACKGROUND.store(true, Ordering::Relaxed);
+}
+
+enum Job {
+    Line(String),
+    /// Reopen the file (after logrotate moved it), then reply.
+    Reopen(std::sync::mpsc::Sender<io::Result<()>>),
+    /// Reply once everything before this is written.
+    Flush(std::sync::mpsc::Sender<()>),
+}
+
+enum Out {
+    Stdout,
+    Stderr,
+    File { path: PathBuf, file: File },
+}
+
+impl Out {
+    fn write(&mut self, buf: &[u8]) -> io::Result<()> {
+        match self {
+            Out::Stdout => io::stdout().lock().write_all(buf),
+            Out::Stderr => io::stderr().lock().write_all(buf),
+            Out::File { file, .. } => file.write_all(buf),
+        }
+    }
+
+    fn reopen(&mut self) -> io::Result<()> {
+        if let Out::File { path, file } = self {
+            *file = open_append(path)?;
+        }
+        Ok(())
+    }
 }
 
 impl Sink {
+    pub fn stdout() -> Sink {
+        Sink::new(Kind::Stdout, Out::Stdout)
+    }
+
+    pub fn stderr() -> Sink {
+        Sink::new(Kind::Stderr, Out::Stderr)
+    }
+
     pub fn open(path: &Path) -> io::Result<Sink> {
-        Ok(Sink::File {
-            path: path.to_path_buf(),
-            file: Mutex::new(open_append(path)?),
-        })
+        let file = open_append(path)?;
+        Ok(Sink::new(
+            Kind::File,
+            Out::File {
+                path: path.to_path_buf(),
+                file,
+            },
+        ))
+    }
+
+    fn new(kind: Kind, out: Out) -> Sink {
+        Sink {
+            kind,
+            out: Arc::new(Mutex::new(out)),
+            queue: OnceLock::new(),
+            dropped: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    /// The background writer's queue, started on first use once ferry
+    /// writes in the background.
+    fn queue(&self) -> Option<&SyncSender<Job>> {
+        if !IN_BACKGROUND.load(Ordering::Relaxed) {
+            return None;
+        }
+        Some(self.queue.get_or_init(|| {
+            let (queue, jobs) = sync_channel::<Job>(QUEUE);
+            let (out, dropped) = (self.out.clone(), self.dropped.clone());
+            std::thread::Builder::new()
+                .name("ferry-log".into())
+                .spawn(move || {
+                    for job in jobs {
+                        let mut out = out.lock().unwrap();
+                        match job {
+                            Job::Line(line) => {
+                                let n = dropped.swap(0, Ordering::Relaxed);
+                                if n > 0 {
+                                    let note = format!(
+                                        "ferry dropped {n} log line(s): the log couldn't keep up\n"
+                                    );
+                                    let _ = out.write(note.as_bytes());
+                                }
+                                let _ = out.write(line.as_bytes());
+                            }
+                            Job::Reopen(reply) => {
+                                let _ = reply.send(out.reopen());
+                            }
+                            Job::Flush(reply) => {
+                                let _ = reply.send(());
+                            }
+                        }
+                    }
+                })
+                .expect("can start a thread");
+            queue
+        }))
     }
 
     /// Writes a whole line in one call, so lines from concurrent requests
@@ -48,27 +166,65 @@ impl Sink {
         if !buf.ends_with('\n') {
             buf.push('\n');
         }
-        let _ = match self {
-            Sink::Stdout => io::stdout().lock().write_all(buf.as_bytes()),
-            Sink::Stderr => io::stderr().lock().write_all(buf.as_bytes()),
-            Sink::File { file, .. } => file.lock().unwrap().write_all(buf.as_bytes()),
-        };
+        match self.queue() {
+            Some(queue) => {
+                if queue.try_send(Job::Line(buf)).is_err() {
+                    self.dropped.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            None => {
+                let _ = self.out.lock().unwrap().write(buf.as_bytes());
+            }
+        }
     }
 
     /// Reopens a file sink (after logrotate moved it). No-op otherwise.
     pub fn reopen(&self) -> io::Result<()> {
-        if let Sink::File { path, file } = self {
-            *file.lock().unwrap() = open_append(path)?;
+        if self.kind != Kind::File {
+            return Ok(());
         }
-        Ok(())
+        let Some(queue) = self.queue() else {
+            return self.out.lock().unwrap().reopen();
+        };
+        let (reply, result) = std::sync::mpsc::channel();
+        let stuck = || io::Error::other("the log isn't keeping up");
+        let wait = Duration::from_secs(5);
+        send_within(queue, Job::Reopen(reply), wait).ok_or_else(stuck)?;
+        result.recv_timeout(wait).map_err(|_| stuck())?
+    }
+
+    /// Waits up to `timeout` for the lines queued so far to be written.
+    pub fn flush(&self, timeout: Duration) {
+        let Some(queue) = self.queue.get() else {
+            return;
+        };
+        let (reply, done) = std::sync::mpsc::channel();
+        if send_within(queue, Job::Flush(reply), timeout).is_some() {
+            let _ = done.recv_timeout(timeout);
+        }
     }
 
     pub fn is_terminal(&self) -> bool {
         use std::io::IsTerminal;
-        match self {
-            Sink::Stdout => io::stdout().is_terminal(),
-            Sink::Stderr => io::stderr().is_terminal(),
-            Sink::File { .. } => false,
+        match self.kind {
+            Kind::Stdout => io::stdout().is_terminal(),
+            Kind::Stderr => io::stderr().is_terminal(),
+            Kind::File => false,
+        }
+    }
+}
+
+/// Queues `job`, waiting up to `timeout` for room.
+fn send_within(queue: &SyncSender<Job>, mut job: Job, timeout: Duration) -> Option<()> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match queue.try_send(job) {
+            Ok(()) => return Some(()),
+            Err(TrySendError::Full(back)) if Instant::now() < deadline => {
+                job = back;
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(_) => return None,
         }
     }
 }
@@ -91,7 +247,7 @@ impl AccessLogger {
         let sink = match &config.access_log {
             AccessLog::Off => None,
             AccessLog::Stdout if config.quiet => None,
-            AccessLog::Stdout => Some(Sink::Stdout),
+            AccessLog::Stdout => Some(Sink::stdout()),
             AccessLog::File(path) => Some(Sink::open(path)?),
         };
         Ok(AccessLogger {
@@ -109,6 +265,13 @@ impl AccessLogger {
 
     pub fn reopen(&self) -> io::Result<()> {
         self.sink.as_ref().map_or(Ok(()), Sink::reopen)
+    }
+
+    /// Waits briefly for queued lines to be written, before exiting.
+    pub fn flush(&self) {
+        if let Some(sink) = &self.sink {
+            sink.flush(Duration::from_secs(1));
+        }
     }
 
     fn log(&self, entry: &Entry) {
@@ -382,13 +545,13 @@ fn error_sink() -> Arc<Sink> {
 
 fn error_sink_slot() -> &'static RwLock<Arc<Sink>> {
     static SINK: OnceLock<RwLock<Arc<Sink>>> = OnceLock::new();
-    SINK.get_or_init(|| RwLock::new(Arc::new(Sink::Stderr)))
+    SINK.get_or_init(|| RwLock::new(Arc::new(Sink::stderr())))
 }
 
 /// Points the error log at the configured destination.
 pub fn set_error_log(target: &ErrorLog) -> io::Result<()> {
     let sink = match target {
-        ErrorLog::Stderr => Sink::Stderr,
+        ErrorLog::Stderr => Sink::stderr(),
         ErrorLog::File(path) => Sink::open(path)?,
     };
     *error_sink_slot().write().unwrap() = Arc::new(sink);
@@ -397,6 +560,12 @@ pub fn set_error_log(target: &ErrorLog) -> io::Result<()> {
 
 pub fn reopen_error_log() -> io::Result<()> {
     error_sink().reopen()
+}
+
+/// Waits briefly for the error log's queued lines to be written, before
+/// exiting.
+pub fn flush_error_log() {
+    error_sink().flush(Duration::from_secs(1));
 }
 
 /// Installs the `tracing` subscriber that writes to the error log.
@@ -462,6 +631,33 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+
+    #[test]
+    fn a_log_that_cant_keep_up_drops_lines_and_says_so() {
+        let dir = std::env::temp_dir().join(format!("ferry-log-{}", crate::proxy::random_id(8)));
+        let path = dir.join("access.log");
+        let sink = Sink::open(&path).unwrap();
+        write_in_background();
+        sink.write_line("first");
+        sink.flush(Duration::from_secs(5));
+        {
+            // Hold the output, as a stuck pipe would, and overfill the queue.
+            let _stuck = sink.out.lock().unwrap();
+            for _ in 0..QUEUE + 10 {
+                sink.write_line("x");
+            }
+            // The writer may have taken one line before blocking on the lock.
+            assert!(sink.dropped.load(Ordering::Relaxed) >= 9);
+        }
+        sink.flush(Duration::from_secs(5));
+        sink.write_line("last");
+        sink.flush(Duration::from_secs(5));
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.starts_with("first\n"), "{}", &text[..20]);
+        assert!(text.contains("log line(s): the log couldn't keep up\n"));
+        assert!(text.ends_with("last\n"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     fn entry() -> Entry {
         let req = Request::builder()

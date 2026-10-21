@@ -32,6 +32,13 @@ use crate::config::Config;
 use crate::server::Server;
 
 fn main() -> ExitCode {
+    let code = start();
+    // Log lines are written by threads of their own; let them finish.
+    log::flush_error_log();
+    code
+}
+
+fn start() -> ExitCode {
     // ferry listens before its signal handlers are installed in `run`, and
     // SIGHUP and SIGUSR1 would kill it until then. Hold them until it's
     // ready; one that arrives meanwhile is delivered then, not lost.
@@ -175,6 +182,8 @@ async fn run(
     sockets: server::Sockets,
     banner: Option<String>,
 ) -> ExitCode {
+    // ferry won't fork from here on, so logs can have threads of their own.
+    log::write_in_background();
     // Handle signals before serving, so none arrive unhandled.
     let mut sigterm = signal(SignalKind::terminate()).expect("can install SIGTERM handler");
     let mut sigint = signal(SignalKind::interrupt()).expect("can install SIGINT handler");
@@ -303,6 +312,7 @@ async fn run(
             sigint.recv().await;
         })
         .await;
+    access_log.flush();
     ExitCode::from(code)
 }
 

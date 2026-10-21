@@ -59,7 +59,8 @@ enable it once per clone with `git config core.hooksPath .githooks` (needs
 - `der.rs`: the few certificate fields ferry reads (notAfter, issuer ==
   subject, subject CN, SAN names). Not a general X.509 parser.
 - `log.rs`: access log (written when the response body finishes) and error
-  log (tracing). `log::timestamp` is the one timestamp format: ISO 8601 UTC
+  log (tracing). Once running, each destination is written by a thread of
+  its own through a bounded queue (none before `-d` forks). `log::timestamp` is the one timestamp format: ISO 8601 UTC
   with milliseconds.
 - `date.rs`: UTC civil-date arithmetic (days ↔ y/m/d) and formatting. No
   time zones: ferry writes everything in UTC.

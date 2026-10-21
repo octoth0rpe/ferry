@@ -482,6 +482,10 @@ UTC with milliseconds: `2026-10-16T03:00:00.123Z`. (In `common` and
 `combined` this replaces Apache's `[16/Oct/2026:03:00:00 +0000]`, so tools
 that parse those formats need their date format set accordingly.)
 
+A log that can't keep up, such as a pipe nobody is reading, never holds up
+requests: ferry queues up to 10,000 lines for it, then drops lines and says
+how many once it catches up.
+
 ## What ferry does to requests
 
 - Speaks HTTP/2 and HTTP/1.1 to clients, negotiated automatically (ALPN).
