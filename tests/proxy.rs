@@ -64,6 +64,51 @@ async fn sets_forwarding_headers_and_strips_hop_by_hop() {
     assert!(!body.contains("203.0.113.7"), "{body}");
 }
 
+/// An upstream that answers every request with `response`, as is.
+async fn raw_upstream(response: &'static [u8]) -> u16 {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut buf = [0u8; 4096];
+                let _ = stream.read(&mut buf).await;
+                let _ = stream.write_all(response).await;
+            });
+        }
+    });
+    port
+}
+
+#[tokio::test]
+async fn clients_get_their_own_http_version_back() {
+    let up = raw_upstream(b"HTTP/1.0 200 OK\r\nContent-Length: 2\r\n\r\nok").await;
+    let port = free_port();
+    let _ferry = Ferry::start(&[&format!("{port}:{up}")], port);
+    let resp = client(false).get(url(port, "/")).send().await.unwrap();
+    assert_eq!(resp.version(), http::Version::HTTP_11);
+    assert_eq!(resp.text().await.unwrap(), "ok");
+}
+
+#[tokio::test]
+async fn an_upgrade_nobody_asked_for_is_a_502() {
+    let up = raw_upstream(
+        b"HTTP/1.1 101 Switching Protocols\r\nConnection: upgrade\r\nUpgrade: x\r\n\r\n",
+    )
+    .await;
+    let port = free_port();
+    let _ferry = Ferry::start(&[&format!("{port}:{up}")], port);
+    for http2 in [false, true] {
+        let resp = client(http2).get(url(port, "/")).send().await.unwrap();
+        assert_eq!(resp.status(), 502, "http2: {http2}");
+        let text = resp.text().await.unwrap();
+        assert!(
+            text.contains("switched protocols on a request that didn't ask to"),
+            "{text}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn connect_requests_are_refused() {
     let up = tcp_upstream("127.0.0.1:0").await;

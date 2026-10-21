@@ -190,7 +190,8 @@ async fn forward(
 
     // Only HTTP/1.1 has Upgrade. WebSockets over HTTP/2 (RFC 8441) aren't
     // offered, so browsers open an HTTP/1.1 connection for them instead.
-    let upgrade = match req.version() {
+    let version = req.version();
+    let upgrade = match version {
         Version::HTTP_11 => upgrade_protocol(req.headers()),
         _ => None,
     };
@@ -269,8 +270,23 @@ async fn forward(
                 .tracker
                 .spawn(tunnel(client_upgrade, upstream_upgrade, held));
         }
+        (StatusCode::SWITCHING_PROTOCOLS, None) => {
+            let message = format!(
+                "ferry: {} switched protocols on a request that didn't ask to.",
+                route.target()
+            );
+            return gateway_error(
+                StatusCode::BAD_GATEWAY,
+                &message,
+                request_id,
+                html,
+                client.peer,
+            );
+        }
         _ => strip_hop_by_hop(resp.headers_mut()),
     }
+    // The client gets its own HTTP version back, whatever the upstream spoke.
+    *resp.version_mut() = version;
     resp.map(|b| b.map_err(BoxError::from).boxed())
 }
 

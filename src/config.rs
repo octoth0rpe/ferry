@@ -646,14 +646,15 @@ pub fn parse_duration(s: &str) -> Result<Duration, String> {
     let err = || format!("`{s}` is not a duration; use e.g. 500ms, 5s, 2m or 1h");
     let split = t.find(|c: char| !c.is_ascii_digit()).unwrap_or(t.len());
     let n: u64 = t[..split].parse().map_err(|_| err())?;
+    let secs = |mult: u64| n.checked_mul(mult).map(Duration::from_secs);
     let d = match t[split..].trim() {
-        "ms" => Duration::from_millis(n),
-        "" | "s" => Duration::from_secs(n),
-        "m" => Duration::from_secs(n * 60),
-        "h" => Duration::from_secs(n * 3600),
+        "ms" => Some(Duration::from_millis(n)),
+        "" | "s" => Some(Duration::from_secs(n)),
+        "m" => secs(60),
+        "h" => secs(3600),
         _ => return Err(err()),
     };
-    Ok(d)
+    d.ok_or_else(|| format!("`{s}` is too long"))
 }
 
 /// Formats a duration the way [`parse_duration`] reads it.
@@ -1004,6 +1005,10 @@ ca_name_constraints = false
         assert_eq!(parse_duration("2m").unwrap(), Duration::from_secs(120));
         assert_eq!(parse_duration("30").unwrap(), Duration::from_secs(30));
         assert!(parse_duration("5 days").is_err());
+        assert_eq!(
+            parse_duration("18446744073709551615h").unwrap_err(),
+            "`18446744073709551615h` is too long"
+        );
         assert_eq!(format_duration(Duration::from_secs(90)), "90s");
         assert_eq!(format_duration(Duration::from_secs(120)), "2m");
         assert_eq!(format_duration(Duration::from_millis(1500)), "1500ms");

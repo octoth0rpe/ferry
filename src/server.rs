@@ -676,7 +676,7 @@ async fn handle_connection(
                         closing = true;
                         // A client that stops reading could hold a graceful
                         // close open forever.
-                        hard_deadline = Some(Instant::now() + state.handshake_timeout);
+                        hard_deadline = Instant::now().checked_add(state.handshake_timeout);
                         conn.as_mut().graceful_shutdown();
                     }
                     _ => {}
