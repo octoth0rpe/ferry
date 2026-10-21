@@ -491,7 +491,9 @@ that parse those formats need their date format set accordingly.)
 - Answers `502` with an explanation when the upstream can't be reached, and
   `504` when connecting times out or the upstream doesn't start answering
   within `idle_timeout`. Browsers get a small HTML page; other clients get
-  plain text.
+  plain text. Only clients on this machine or a private network are told
+  which upstream failed and why; others get the request ID, which the error
+  log line has too.
 - Raises its open-file limit at startup, and caps connections (clients and
   upstreams together) to fit it. At the cap, new clients wait to be
   accepted, and requests that need an upstream connection get `503`.

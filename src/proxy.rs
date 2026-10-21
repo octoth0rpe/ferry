@@ -236,12 +236,12 @@ async fn forward(
 
     let response = route.client.request(upstream_req);
     let Some(response) = until_stalled(response, progress, stall).await else {
-        return stalled(route, stall, request_id, html);
+        return stalled(route, stall, request_id, html, client.peer);
     };
     let mut resp = match response {
         Ok(resp) => resp,
         Err(_) if exceeded.load(Ordering::Relaxed) => return too_large(html),
-        Err(e) => return upstream_error(route, &e, request_id, html),
+        Err(e) => return upstream_error(route, &e, request_id, html, client.peer),
     };
 
     match (resp.status(), client_upgrade) {
@@ -461,6 +461,7 @@ fn upstream_error(
     err: &hyper_util::client::legacy::Error,
     request_id: &HeaderValue,
     html: bool,
+    peer: SocketAddr,
 ) -> Response<Body> {
     let target = route.target();
     let io_kind = io_error_kind(err);
@@ -491,12 +492,34 @@ fn upstream_error(
             ),
         )
     };
-    tracing::warn!(
-        "{} (request {})",
-        message.trim_start_matches("ferry: "),
-        request_id.to_str().unwrap_or("-")
-    );
-    error_page(status, &message, html)
+    gateway_error(status, &message, request_id, html, peer)
+}
+
+/// Logs what went wrong with the upstream, and tells the client. Only
+/// clients on this machine or a private network are told the details (the
+/// upstream's address, socket path and error); the internet just gets the
+/// request ID, which the error log line has too.
+fn gateway_error(
+    status: StatusCode,
+    message: &str,
+    request_id: &HeaderValue,
+    html: bool,
+    peer: SocketAddr,
+) -> Response<Body> {
+    let id = request_id.to_str().unwrap_or("-");
+    tracing::warn!("{} (request {id})", message.trim_start_matches("ferry: "));
+    if crate::net::is_private(peer.ip()) {
+        return error_page(status, message, html);
+    }
+    let what = match status {
+        StatusCode::GATEWAY_TIMEOUT => "didn't respond in time",
+        _ => "isn't available right now",
+    };
+    error_page(
+        status,
+        &format!("ferry: the application {what}. (Request ID {id}.)"),
+        html,
+    )
 }
 
 fn busy(html: bool) -> Response<Body> {
@@ -507,18 +530,25 @@ fn busy(html: bool) -> Response<Body> {
     )
 }
 
-fn stalled(route: &Route, stall: Duration, request_id: &HeaderValue, html: bool) -> Response<Body> {
+fn stalled(
+    route: &Route,
+    stall: Duration,
+    request_id: &HeaderValue,
+    html: bool,
+    peer: SocketAddr,
+) -> Response<Body> {
     let message = format!(
         "ferry: {} didn't respond within {}.",
         route.target(),
         format_duration(stall)
     );
-    tracing::warn!(
-        "{} (request {})",
-        message.trim_start_matches("ferry: "),
-        request_id.to_str().unwrap_or("-")
-    );
-    error_page(StatusCode::GATEWAY_TIMEOUT, &message, html)
+    gateway_error(
+        StatusCode::GATEWAY_TIMEOUT,
+        &message,
+        request_id,
+        html,
+        peer,
+    )
 }
 
 fn io_error_kind(err: &(dyn std::error::Error + 'static)) -> Option<io::ErrorKind> {
@@ -697,6 +727,53 @@ mod tests {
         assert_eq!(request_id(&h).len(), 16);
         h.insert(X_REQUEST_ID, "abc".parse().unwrap());
         assert_eq!(request_id(&h), "abc");
+    }
+
+    async fn text(resp: Response<Body>) -> String {
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        String::from_utf8(body.to_vec()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn only_private_clients_see_upstream_details() {
+        let id = HeaderValue::from_static("abc123");
+        let message = "ferry: nothing is listening on /run/app.sock — is your app running?";
+        let private = gateway_error(
+            StatusCode::BAD_GATEWAY,
+            message,
+            &id,
+            false,
+            "192.168.1.5:5".parse().unwrap(),
+        );
+        assert!(text(private).await.contains("/run/app.sock"));
+
+        let public = gateway_error(
+            StatusCode::BAD_GATEWAY,
+            message,
+            &id,
+            false,
+            "203.0.113.7:5".parse().unwrap(),
+        );
+        assert_eq!(public.status(), 502);
+        let body = text(public).await;
+        assert!(!body.contains("app.sock"), "{body}");
+        assert!(
+            body.contains("the application isn't available right now. (Request ID abc123.)"),
+            "{body}"
+        );
+
+        let timeout = gateway_error(
+            StatusCode::GATEWAY_TIMEOUT,
+            message,
+            &id,
+            false,
+            "[2001:db8::1]:5".parse().unwrap(),
+        );
+        assert!(
+            text(timeout)
+                .await
+                .contains("the application didn't respond in time")
+        );
     }
 
     #[test]

@@ -363,6 +363,8 @@ When an upstream cannot be reached, ferry answers 502 with a short
 explanation (HTML for browsers, plain text otherwise), or 504 if connecting
 timed out or the upstream didn't start answering within
 .BR idle_timeout .
+Only clients on loopback or a private network are told which upstream failed
+and why; others get the request ID, which the error log line has too.
 .PP
 A connection that sends no request within
 .B handshake_timeout
