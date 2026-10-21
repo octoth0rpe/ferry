@@ -124,8 +124,12 @@ pub async fn tcp_upstream(addr: &str) -> u16 {
     let port = listener.local_addr().unwrap().port();
     tokio::spawn(async move {
         loop {
-            let (stream, _) = listener.accept().await.unwrap();
-            tokio::spawn(serve(stream));
+            // A client that gives up before it's accepted fails accept()
+            // (ECONNABORTED on macOS); ferry does that when it tries ::1 and
+            // 127.0.0.1 for `localhost` and keeps the first to connect.
+            if let Ok((stream, _)) = listener.accept().await {
+                tokio::spawn(serve(stream));
+            }
         }
     });
     port
@@ -136,8 +140,9 @@ pub async fn unix_upstream(path: &Path) {
     let listener = tokio::net::UnixListener::bind(path).unwrap();
     tokio::spawn(async move {
         loop {
-            let (stream, _) = listener.accept().await.unwrap();
-            tokio::spawn(serve(stream));
+            if let Ok((stream, _)) = listener.accept().await {
+                tokio::spawn(serve(stream));
+            }
         }
     });
 }
