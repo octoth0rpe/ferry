@@ -166,7 +166,7 @@ pub fn load_or_create(constrain: bool) -> Result<LocalCa, String> {
 /// couldn't write its files there.
 fn with_home_hint(err: String) -> String {
     match dirs::home_hint() {
-        Some(hint) => format!("{err}. {hint}"),
+        Some(hint) => format!("{err}\n  {hint}"),
         None => err,
     }
 }
